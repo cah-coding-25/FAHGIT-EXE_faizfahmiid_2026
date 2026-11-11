@@ -1,0 +1,8 @@
+{
+  "name": "Projeck FAHGIT - GitHub Repository \u0026 File Manager",
+  "description": "Projeck aplikasi EXE Fahgit yaitu aplikasi unggah , edit dan lain lain . Fitur unggulan terus update selama repositori masih ada. Dan lebih baik masih terhubung ke Google Ai Studio sebagai mesin peng-update. (Faiz_Fahmi_ID_2026)",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,118 @@
+name: FAHGIT Windows Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (misal: v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Windows Application & GitHub Release
+    runs-on: windows-latest
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 2. Setup Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 3. Install Dependencies
+        shell: pwsh
+        run: |
+          if (Test-Path "package-lock.json") { Remove-Item -Force "package-lock.json" }
+          npm install --legacy-peer-deps
+          npm install --no-save --legacy-peer-deps @rolldown/binding-win32-x64-msvc@1.2.16
+
+      - name: 4. Validate & Typecheck
+        run: npm run lint
+
+      - name: 5. Build Web Application
+        run: npm run build
+
+      - name: 6. Build Windows Distributions (NSIS, Portable, Unpacked)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-builder --win nsis portable dir -p never
+
+      - name: 7. Compress win-unpacked Directory for Distribution
+        shell: pwsh
+        run: |
+          if (Test-Path "release/win-unpacked") {
+            Compress-Archive -Path "release/win-unpacked/*" -DestinationPath "release/FAHGIT-win-unpacked.zip" -Force
+          }
+
+      - name: 8. Generate SHA256 Checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "release"
+          Get-ChildItem -Path "release" -Include "*.exe", "*.zip", "latest.yml" -Recurse | ForEach-Object {
+            $hash = Get-FileHash -Path $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.Name)" | Out-File -FilePath "release/checksums-sha256.txt" -Append -Encoding ascii
+          }
+          if (Test-Path "release/checksums-sha256.txt") {
+            Write-Host "Generated SHA256 Checksums:"
+            Get-Content "release/checksums-sha256.txt"
+          }
+
+      - name: 9. Determine Release Tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.release_tag }}"
+          if (-not $tag -and $env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF.Substring(10)
+          }
+          if (-not $tag) {
+            $pkg = Get-Content "package.json" | ConvertFrom-Json
+            $tag = "v$($pkg.version)"
+          }
+          Write-Host "Using Release Tag: $tag"
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 10. Publish GitHub Release with Artifacts
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: FAHGIT ${{ env.RELEASE_TAG }} by Faiz_Fahmi_ID
+          body: |
+            ## FAHGIT by: Faiz_Fahmi_ID — Windows Desktop Release (${{ env.RELEASE_TAG }})
+            *Your GitHub. Your Files. Your Control.*
+
+            ### Distribusi Windows yang Tersedia:
+            1. **Windows Installer (Setup)**: `FAHGIT-Setup-*.exe` (Mendukung instalasi Windows, shortcut, dan Auto-Update otomatis via `electron-updater`).
+            2. **Windows Portable**: `FAHGIT-Portable-*.exe` (Dapat langsung dijalankan tanpa instalasi dari USB flash disk / folder mana pun).
+            3. **Unpacked Application (ZIP)**: `FAHGIT-win-unpacked.zip` (Folder aplikasi siap pakai tanpa installer).
+            4. **Manifest Auto-Update**: `latest.yml` (Metadata verifikasi untuk sistem Auto-Update otomatis).
+            5. **Integritas & Checksum**: `checksums-sha256.txt` (Daftar hash SHA-256 untuk verifikasi keamanan setiap file).
+
+            ### Fitur Utama:
+            - **Mesin Auto Update Permanen**: Deteksi rilis terbaru otomatis saat startup dengan pop-up konfirmasi (Update Sekarang, Lewati, Silang).
+            - **Online + Offline Adaptive Engine**: Integrasi penyimpanan lokal, Monaco Editor offline, ZIP Extractor client-side, dan antrean sinkronisasi saat internet terputus.
+            - **100% Client-Side HTTPS**: Keamanan tingkat tinggi, token PAT tersimpan terenkripsi di perangkat Anda.
+          files: |
+            release/*.exe
+            release/*.zip
+            release/latest.yml
+            release/checksums-sha256.txt
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
