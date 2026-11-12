@@ -20,11 +20,10 @@ import {
 
 export const ActivityLogsView: React.FC = () => {
   const { activityLogs, refreshActivityLogs, notify } = useApp();
-  const [filterAction, setFilterAction] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'SUCCESS' | 'ERROR' | 'INFO'>('ALL');
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const filteredLogs = activityLogs.filter((log) => {
-    if (filterAction !== 'ALL' && log.action !== filterAction) return false;
     if (filterStatus !== 'ALL' && log.status !== filterStatus) return false;
     return true;
   });
@@ -37,11 +36,15 @@ export const ActivityLogsView: React.FC = () => {
   };
 
   const handleClearLogs = async () => {
-    if (window.confirm('Bersihkan seluruh catatan audit aktivitas lokal?')) {
-      await clearActivityLogs();
-      await refreshActivityLogs();
-      notify('info', 'Seluruh log aktivitas telah dibersihkan.', 'Dibersihkan');
+    if (!confirmClear) {
+      setConfirmClear(true);
+      setTimeout(() => setConfirmClear(false), 4000);
+      return;
     }
+    await clearActivityLogs();
+    await refreshActivityLogs();
+    setConfirmClear(false);
+    notify('info', 'Seluruh log aktivitas telah dibersihkan.', 'Dibersihkan');
   };
 
   return (
@@ -71,10 +74,14 @@ export const ActivityLogsView: React.FC = () => {
           <button
             onClick={handleClearLogs}
             disabled={activityLogs.length === 0}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs font-semibold disabled:opacity-50 transition-colors"
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold disabled:opacity-50 transition-colors border ${
+              confirmClear
+                ? 'bg-red-500 text-white border-red-400'
+                : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20'
+            }`}
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Bersihkan Log</span>
+            <span>{confirmClear ? 'Klik Lagi untuk Hapus Semua' : 'Bersihkan Log'}</span>
           </button>
         </div>
       </div>

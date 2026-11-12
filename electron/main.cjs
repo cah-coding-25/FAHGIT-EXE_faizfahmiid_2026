@@ -37,6 +37,11 @@ try {
 }
 
 let mainWindow = null;
+let hasPerformedStartupUpdateCheck = false;
+let hasEmittedUpdateThisSession = false;
+
+// Baseline timestamp for v1.0.0 reset: ignore older/stale releases published before 2026-11-12T00:00:00Z
+const BASELINE_RELEASE_MS = Date.parse('2026-11-12T00:00:00Z');
 let networkStatus = {
   isOnline: true,
   lastChecked: Date.now(),
@@ -121,10 +126,13 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    // Check update on startup after a safe delay
-    setTimeout(() => {
-      checkForUpdatesSilent();
-    }, 3500);
+    // Jalankan pengecekan update HANYA SATU KALI saat aplikasi pertama kali dibuka
+    if (!hasPerformedStartupUpdateCheck) {
+      hasPerformedStartupUpdateCheck = true;
+      setTimeout(() => {
+        checkForUpdatesSilent();
+      }, 3500);
+    }
   });
 
   mainWindow.on('closed', () => {
@@ -169,10 +177,50 @@ function checkNetworkConnectivity() {
 }
 
 // =========================================================================
-// PERMANENT AUTO-UPDATE ENGINE (INSTALLER & PORTABLE COMPATIBLE)
+// STRICT RELEASE SANITIZATION & VALIDATION HELPERS
+// =========================================================================
+function sanitizeReleaseNotes(raw) {
+  if (!raw || typeof raw !== 'string') {
+    return 'Pembaruan stabilitas dan peningkatan performa.';
+  }
+  return raw
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6]|li|ul|ol)>/gi, '\n')
+    .replace(/<\s*li[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function isStrictSemver(ver) {
+  return /^\d+\.\d+\.\d+$/.test(String(ver || '').replace(/^v/i, '').trim());
+}
+
+function isReleaseAfterBaseline(releaseDateStr) {
+  if (!releaseDateStr) return false;
+  const parsed = Date.parse(releaseDateStr);
+  if (Number.isNaN(parsed)) return false;
+  return parsed >= BASELINE_RELEASE_MS;
+}
+
+function emitUpdateAvailableOnce(payload) {
+  if (hasEmittedUpdateThisSession) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  hasEmittedUpdateThisSession = true;
+  mainWindow.webContents.send('desktop:update-available', payload);
+}
+
+// =========================================================================
+// PERMANENT AUTO-UPDATE ENGINE (STRICT, COLD-START ONLY)
 // =========================================================================
 async function checkForUpdatesSilent() {
-  if (!mainWindow) return;
+  if (!mainWindow || hasEmittedUpdateThisSession) return;
 
   // 1. If electron-updater is available and packaged as NSIS installer
   if (autoUpdater && app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR) {
@@ -184,11 +232,14 @@ async function checkForUpdatesSilent() {
     return;
   }
 
-  // 2. Direct GitHub Releases API verification (works in Dev, Portable EXE & Unpacked)
-  checkGitHubReleasesDirect();
+  // 2. Direct GitHub Releases API verification (works in Portable EXE & Unpacked)
+  if (app.isPackaged) {
+    checkGitHubReleasesDirect();
+  }
 }
 
 function checkGitHubReleasesDirect(token) {
+  if (hasEmittedUpdateThisSession) return;
   const currentVersion = app.getVersion();
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
   const headers = {
@@ -207,31 +258,38 @@ function checkGitHubReleasesDirect(token) {
         try {
           if (res.statusCode !== 200) return;
           const release = JSON.parse(data);
-          const latestVersion = (release.tag_name || '').replace(/^v/, '');
 
-          if (isNewerVersion(currentVersion, latestVersion)) {
-            // Find windows assets
-            const assets = release.assets || [];
-            const installerAsset = assets.find((a) => a.name.endsWith('.exe') && !a.name.includes('Portable'));
-            const portableAsset = assets.find((a) => a.name.includes('Portable') && a.name.endsWith('.exe'));
-            const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
-            const targetAsset = isPortable ? (portableAsset || installerAsset) : (installerAsset || portableAsset);
+          // Tolak draft atau prerelease
+          if (!release || release.draft || release.prerelease) return;
 
-            const updateInfo = {
-              currentVersion,
-              latestVersion,
-              releaseName: release.name || `FAHGIT v${latestVersion}`,
-              releaseNotes: release.body || 'Pembaruan stabilitas dan peningkatan performa.',
-              releaseDate: release.published_at || new Date().toISOString(),
-              downloadUrl: targetAsset ? targetAsset.browser_download_url : release.html_url,
-              downloadSize: targetAsset ? targetAsset.size : 0,
-              isPortable,
-            };
+          const latestVersion = String(release.tag_name || '').replace(/^v/i, '').trim();
+          if (!isStrictSemver(latestVersion)) return;
 
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('desktop:update-available', updateInfo);
-            }
-          }
+          // Wajib lebih baru dari baseline v1.0.0 saat ini DAN terbit setelah tanggal baseline
+          if (!isNewerVersion(currentVersion, latestVersion)) return;
+          if (!isReleaseAfterBaseline(release.published_at)) return;
+
+          // Wajib memiliki aset Windows (.exe) yang valid
+          const assets = Array.isArray(release.assets) ? release.assets : [];
+          const installerAsset = assets.find((a) => a.name && a.name.endsWith('.exe') && !a.name.includes('Portable'));
+          const portableAsset = assets.find((a) => a.name && a.name.includes('Portable') && a.name.endsWith('.exe'));
+          const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+          const targetAsset = isPortable ? (portableAsset || installerAsset) : (installerAsset || portableAsset);
+
+          if (!targetAsset) return;
+
+          const updateInfo = {
+            currentVersion,
+            latestVersion,
+            releaseName: release.name || `FAHGIT v${latestVersion}`,
+            releaseNotes: sanitizeReleaseNotes(release.body),
+            releaseDate: release.published_at,
+            downloadUrl: targetAsset.browser_download_url,
+            downloadSize: targetAsset.size || 0,
+            isPortable,
+          };
+
+          emitUpdateAvailableOnce(updateInfo);
         } catch {
           // ignore parsing error
         }
@@ -244,8 +302,12 @@ function checkGitHubReleasesDirect(token) {
 
 function isNewerVersion(current, target) {
   if (!current || !target) return false;
-  const c = current.replace(/^v/, '').split('.').map(Number);
-  const t = target.replace(/^v/, '').split('.').map(Number);
+  const cleanCurrent = String(current).replace(/^v/i, '').trim();
+  const cleanTarget = String(target).replace(/^v/i, '').trim();
+  if (!isStrictSemver(cleanCurrent) || !isStrictSemver(cleanTarget)) return false;
+
+  const c = cleanCurrent.split('.').map(Number);
+  const t = cleanTarget.split('.').map(Number);
   for (let i = 0; i < 3; i++) {
     const cur = c[i] || 0;
     const tar = t[i] || 0;
@@ -258,17 +320,27 @@ function isNewerVersion(current, target) {
 // Setup electron-updater event forwarding if available
 if (autoUpdater) {
   autoUpdater.on('update-available', (info) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('desktop:update-available', {
-        currentVersion: app.getVersion(),
-        latestVersion: info.version,
-        releaseName: info.releaseName || `FAHGIT v${info.version}`,
-        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : 'Pembaruan aplikasi.',
-        releaseDate: info.releaseDate || new Date().toISOString(),
-        downloadSize: 0,
-        isPortable: Boolean(process.env.PORTABLE_EXECUTABLE_DIR),
-      });
-    }
+    const currentVersion = app.getVersion();
+    const latestVersion = String(info?.version || '').replace(/^v/i, '').trim();
+
+    if (!isNewerVersion(currentVersion, latestVersion)) return;
+    if (!isReleaseAfterBaseline(info?.releaseDate)) return;
+
+    const rawNotes = Array.isArray(info?.releaseNotes)
+      ? info.releaseNotes.map((n) => (typeof n === 'string' ? n : n.note || '')).join('\n')
+      : typeof info?.releaseNotes === 'string'
+      ? info.releaseNotes
+      : '';
+
+    emitUpdateAvailableOnce({
+      currentVersion,
+      latestVersion,
+      releaseName: info.releaseName || `FAHGIT v${latestVersion}`,
+      releaseNotes: sanitizeReleaseNotes(rawNotes),
+      releaseDate: info.releaseDate || new Date().toISOString(),
+      downloadSize: 0,
+      isPortable: Boolean(process.env.PORTABLE_EXECUTABLE_DIR),
+    });
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
@@ -313,6 +385,12 @@ ipcMain.handle('desktop:get-app-info', () => {
 });
 
 ipcMain.handle('desktop:check-updates', async (event, token) => {
+  // Hanya izinkan 1 kali pengecekan startup per sesi aplikasi
+  if (hasPerformedStartupUpdateCheck || hasEmittedUpdateThisSession) {
+    return { status: 'already-checked' };
+  }
+  hasPerformedStartupUpdateCheck = true;
+
   if (autoUpdater && app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR) {
     try {
       if (token) {
@@ -324,10 +402,11 @@ ipcMain.handle('desktop:check-updates', async (event, token) => {
       checkGitHubReleasesDirect(token);
       return { status: 'fallback', message: err.message };
     }
-  } else {
+  } else if (app.isPackaged) {
     checkGitHubReleasesDirect(token);
     return { status: 'checking-direct' };
   }
+  return { status: 'dev-skipped' };
 });
 
 ipcMain.handle('desktop:start-download', async () => {

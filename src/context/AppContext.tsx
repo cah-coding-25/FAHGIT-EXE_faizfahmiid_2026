@@ -120,7 +120,8 @@ interface AppContextValue {
   selectRepo: (repo: GitHubRepo) => Promise<void>;
   selectBranch: (branchName: string) => Promise<void>;
   refreshTree: () => Promise<void>;
-  refreshRepos: () => Promise<void>;
+  refreshRepos: () => Promise<GitHubRepo[]>;
+  removeRepoLocally: (repo: GitHubRepo) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -473,18 +474,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [token, notify]);
 
   // Refresh repository list
-  const refreshRepos = useCallback(async () => {
-    if (!token) return;
+  const refreshRepos = useCallback(async (): Promise<GitHubRepo[]> => {
+    if (!token) return [];
     setIsLoadingRepos(true);
     try {
       const userRepos = await getUserRepos(token);
       setRepos(userRepos);
+      setActiveRepo((currentActive) => {
+        if (currentActive && !userRepos.some((r) => r.id === currentActive.id)) {
+          setBranches([]);
+          setActiveBranch('');
+          setTreeItems([]);
+          setCurrentPath('');
+          return null;
+        }
+        return currentActive;
+      });
+      return userRepos;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Failed to refresh repositories', 'Error');
+      return [];
     } finally {
       setIsLoadingRepos(false);
     }
   }, [token, notify]);
+
+  // Immediately purge deleted repository from active UI state and activity logs
+  const removeRepoLocally = useCallback(
+    async (deletedRepo: GitHubRepo) => {
+      setRepos((prev) => prev.filter((r) => r.id !== deletedRepo.id));
+
+      if (activeRepo?.id === deletedRepo.id) {
+        setActiveRepo(null);
+        setBranches([]);
+        setActiveBranch('');
+        setTreeItems([]);
+        setCurrentPath('');
+      }
+
+      setEditorTabs((prev) => {
+        const remaining = prev.filter((t) => !t.id.startsWith(`${deletedRepo.full_name}:`));
+        if (activeTabId && !remaining.some((t) => t.id === activeTabId)) {
+          setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+        }
+        return remaining;
+      });
+
+      if (favorites.repos.includes(deletedRepo.full_name)) {
+        const updatedFavs = {
+          ...favorites,
+          repos: favorites.repos.filter((r) => r !== deletedRepo.full_name),
+        };
+        setFavorites(updatedFavs);
+        await saveFavorites(updatedFavs);
+      }
+
+      await addActivityLog({
+        action: 'REPO_DELETED',
+        repo: deletedRepo.full_name,
+        status: 'SUCCESS',
+        details: `Menghapus permanen repositori ${deletedRepo.full_name}`,
+      });
+      refreshActivityLogs();
+    },
+    [activeRepo, activeTabId, favorites, refreshActivityLogs]
+  );
 
   // Select a repository and load its branches and root tree
   const selectRepo = useCallback(
@@ -815,6 +869,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectBranch,
         refreshTree,
         refreshRepos,
+        removeRepoLocally,
       }}
     >
       {children}

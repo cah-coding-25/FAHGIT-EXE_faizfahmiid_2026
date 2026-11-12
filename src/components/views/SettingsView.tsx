@@ -7,7 +7,7 @@
  * 4. Preferensi Editor Monaco & Keamanan Sesi
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { createBranch, deleteBranch } from '../../services/github';
 import {
@@ -64,6 +64,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab = 'theme'
     initialTab
   );
 
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
   // Token GitHub Form State
   const [newTokenInput, setNewTokenInput] = useState('');
   const [rememberToken, setRememberToken] = useState(true);
@@ -76,6 +80,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab = 'theme'
   const [isCreatingBranch, setIsCreatingBranch] = useState(false);
   const [deleteBranchTarget, setDeleteBranchTarget] = useState<string | null>(null);
   const [isDeletingBranch, setIsDeletingBranch] = useState(false);
+
+  useEffect(() => {
+    if (activeBranch) {
+      setSourceBranch(activeBranch);
+    }
+  }, [activeBranch]);
 
   // Simpan / Perbarui Token GitHub
   const handleUpdateToken = async (e: React.FormEvent) => {

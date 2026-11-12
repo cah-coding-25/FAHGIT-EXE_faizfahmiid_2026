@@ -40,6 +40,7 @@ export const BackupRestoreView: React.FC = () => {
 
   const [isExportingZip, setIsExportingZip] = useState(false);
   const [zipProgress, setZipProgress] = useState(0);
+  const [confirmPurgeModal, setConfirmPurgeModal] = useState(false);
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
   // Export encrypted backup configuration
@@ -132,12 +133,11 @@ export const BackupRestoreView: React.FC = () => {
   };
 
   const handlePurgeAll = async () => {
-    if (window.confirm('PERINGATAN: Apakah Anda yakin ingin menghapus seluruh data lokal di browser ini?')) {
-      await purgeAllLocalData();
-      await disconnectGitHub(true);
-      notify('info', 'Seluruh data lokal telah dihapus.', 'Pembersihan Selesai');
-      window.location.reload();
-    }
+    setConfirmPurgeModal(false);
+    await purgeAllLocalData();
+    await disconnectGitHub(true);
+    notify('info', 'Seluruh data lokal telah dihapus.', 'Pembersihan Selesai');
+    window.location.reload();
   };
 
   return (
@@ -241,13 +241,43 @@ export const BackupRestoreView: React.FC = () => {
         </p>
 
         <button
-          onClick={handlePurgeAll}
+          onClick={() => setConfirmPurgeModal(true)}
           className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-colors"
         >
           <Trash2 className="w-4 h-4" />
           <span>Hapus Bersih Semua Data Lokal</span>
         </button>
       </div>
+
+      {confirmPurgeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="clay-card rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-red-500/30 space-y-4">
+            <h3 className="text-sm font-bold text-rose-500 dark:text-rose-400 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              Hapus Semua Data Lokal?
+            </h3>
+            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              Seluruh token GitHub terenkripsi, log aktivitas, favorit, dan pengaturan lokal akan dihapus permanen dari perangkat ini.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmPurgeModal(false)}
+                className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handlePurgeAll}
+                className="px-5 py-2 rounded-full bg-gradient-to-r from-rose-500 to-red-600 text-white font-bold text-xs shadow-md hover:scale-105"
+              >
+                Ya, Hapus Semua
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -21,10 +21,8 @@ import {
   getBlob,
 } from '../../services/github';
 import {
-  formatFileSize,
   isImageFile,
-  isBinaryFile,
-  base64ToUtf8,
+  utf8ToBase64,
   triggerDownload,
 } from '../../utils/fileUtils';
 import { createZipFromFiles } from '../../services/zip';
@@ -120,6 +118,7 @@ export const FileManagerView: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const activeTab = editorTabs.find((t) => t.id === activeTabId);
 
@@ -258,12 +257,12 @@ export const FileManagerView: React.FC = () => {
         ? `${currentPath.replace(/^\/+|\/+$/g, '')}/${newFileName.trim()}`
         : newFileName.trim();
 
-      await saveFile(
+      const saved = await saveFile(
         token,
         activeRepo.owner.login,
         activeRepo.name,
         cleanPath,
-        newFileContent,
+        utf8ToBase64(newFileContent),
         newFileCommitMsg || `Buat berkas ${cleanPath}`,
         activeBranch
       );
@@ -275,10 +274,8 @@ export const FileManagerView: React.FC = () => {
       setNewFileCommitMsg('');
       await refreshTree();
 
-      // Buka langsung di editor
-      const updatedItem = treeItems.find((i) => i.path === cleanPath);
-      if (updatedItem) {
-        await openInEditor(cleanPath, updatedItem.sha);
+      if (saved?.content?.sha) {
+        await openInEditor(cleanPath, saved.content.sha);
         setMobileTab('editor');
       }
     } catch (err) {
@@ -368,14 +365,14 @@ export const FileManagerView: React.FC = () => {
       const newPath = parentDir ? `${parentDir}/${renameNewName.trim()}` : renameNewName.trim();
 
       const blob = await getBlob(token, activeRepo.owner.login, activeRepo.name, renameTarget.sha);
-      const content = isBinaryFile(renameTarget.name) ? blob.content : base64ToUtf8(blob.content);
+      const base64Content = blob.content.replace(/\s/g, '');
 
       await saveFile(
         token,
         activeRepo.owner.login,
         activeRepo.name,
         newPath,
-        content,
+        base64Content,
         `Ganti nama ${renameTarget.path} menjadi ${newPath}`,
         activeBranch
       );
@@ -470,10 +467,14 @@ export const FileManagerView: React.FC = () => {
 
   const handleDiscardChanges = () => {
     if (!activeTab) return;
-    if (window.confirm(`Batalkan perubahan yang belum disimpan pada ${activeTab.name}?`)) {
-      updateTabContent(activeTab.id, activeTab.originalContent);
-      notify('info', `Perubahan pada ${activeTab.name} telah dibatalkan`, 'Dibatalkan');
+    if (!confirmDiscard) {
+      setConfirmDiscard(true);
+      setTimeout(() => setConfirmDiscard(false), 4000);
+      return;
     }
+    updateTabContent(activeTab.id, activeTab.originalContent);
+    setConfirmDiscard(false);
+    notify('info', `Perubahan pada ${activeTab.name} telah dibatalkan`, 'Dibatalkan');
   };
 
   const formatJson = () => {
@@ -555,7 +556,7 @@ export const FileManagerView: React.FC = () => {
         {/* ======================================================================= */}
         <div
           className={`md:col-span-5 lg:col-span-4 clay-card rounded-3xl p-4 shadow-xl flex flex-col h-[650px] ${
-            mobileTab === 'explorer' ? 'block' : 'hidden md:flex'
+            mobileTab === 'explorer' ? 'flex' : 'hidden md:flex'
           }`}
         >
           {/* Action Toolbar Penjelajah: Tambah File, Tambah Folder, Unduh ZIP */}
@@ -732,7 +733,7 @@ export const FileManagerView: React.FC = () => {
         {/* ======================================================================= */}
         <div
           className={`md:col-span-7 lg:col-span-8 clay-card rounded-3xl overflow-hidden shadow-2xl flex flex-col h-[650px] border border-white/10 ${
-            mobileTab === 'editor' ? 'block' : 'hidden md:flex'
+            mobileTab === 'editor' ? 'flex' : 'hidden md:flex'
           }`}
         >
           {editorTabs.length === 0 || !activeTab ? (
@@ -870,11 +871,15 @@ export const FileManagerView: React.FC = () => {
                   {activeTab.isDirty && (
                     <button
                       onClick={handleDiscardChanges}
-                      className="hover:text-rose-400 flex items-center gap-1"
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition-colors ${
+                        confirmDiscard
+                          ? 'bg-rose-500/20 text-rose-400 font-bold'
+                          : 'hover:text-rose-400'
+                      }`}
                       title="Batalkan perubahan"
                     >
                       <RotateCcw className="w-3 h-3" />
-                      <span>Batalkan</span>
+                      <span>{confirmDiscard ? 'Klik lagi untuk konfirmasi' : 'Batalkan'}</span>
                     </button>
                   )}
                 </div>

@@ -39,8 +39,11 @@ import {
   CloneResult,
 } from '../../services/repoCloner';
 
+import { getUserRepos, getBranches } from '../../services/github';
+import { GitHubBranch } from '../../types';
+
 export const RepoClonerView: React.FC = () => {
-  const { token, user, repos, selectRepo, setView } = useApp();
+  const { token, repos, refreshRepos, selectRepo, setView } = useApp();
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
   useEffect(() => {
@@ -66,6 +69,7 @@ export const RepoClonerView: React.FC = () => {
   const [newRepoDesc, setNewRepoDesc] = useState('');
   const [newRepoPrivate, setNewRepoPrivate] = useState(false);
   const [selectedExistingRepoId, setSelectedExistingRepoId] = useState<number | null>(null);
+  const [existingRepoBranches, setExistingRepoBranches] = useState<GitHubBranch[]>([]);
   const [selectedTargetBranch, setSelectedTargetBranch] = useState('main');
 
   // Cloning Execution State
@@ -115,6 +119,26 @@ export const RepoClonerView: React.FC = () => {
     }
   };
 
+  const handleSelectExistingRepo = async (repoId: number) => {
+    setSelectedExistingRepoId(repoId || null);
+    setExistingRepoBranches([]);
+    const found = repos.find((r) => r.id === repoId);
+    if (!found) return;
+
+    setSelectedTargetBranch(found.default_branch || 'main');
+    if (token) {
+      try {
+        const branchList = await getBranches(token, found.owner.login, found.name);
+        setExistingRepoBranches(branchList);
+        if (branchList.length > 0 && !branchList.some((b) => b.name === found.default_branch)) {
+          setSelectedTargetBranch(branchList[0].name);
+        }
+      } catch {
+        // Repo bisa saja masih kosong (0 branch), pakai default_branch
+      }
+    }
+  };
+
   // Trigger cloning execution
   const handleStartClone = async () => {
     if (!token) {
@@ -159,16 +183,21 @@ export const RepoClonerView: React.FC = () => {
       const result = await executeCloneRepository({
         token,
         sourceRepo,
+        sourceBranch: sourceRepo.defaultBranch,
         isCreateNewRepo: targetMode === 'new',
-        targetRepoName: newRepoName.trim(),
+        targetRepoName: newRepoName.trim().replace(/\s+/g, '-'),
         targetRepoDescription: newRepoDesc.trim(),
         targetIsPrivate: newRepoPrivate,
         existingTargetRepo: existingRepoObj,
-        targetBranch: selectedTargetBranch,
+        targetBranch:
+          targetMode === 'existing'
+            ? selectedTargetBranch.trim() || existingRepoObj?.default_branch || 'main'
+            : sourceRepo.defaultBranch,
         onProgress: (p) => setProgress(p),
       });
 
       setCloneResult(result);
+      await refreshRepos();
     } catch (err) {
       setCloneError(err instanceof Error ? err.message : 'Terjadi kesalahan saat mengkloning repositori.');
     } finally {
@@ -187,11 +216,19 @@ export const RepoClonerView: React.FC = () => {
   };
 
   // Open the newly cloned repo in File Manager
-  const handleOpenInFileManager = () => {
+  const handleOpenInFileManager = async () => {
     if (!cloneResult) return;
-    const repoMatch = repos.find((r) => r.full_name === cloneResult.destinationRepo);
+    let repoMatch = repos.find((r) => r.full_name === cloneResult.destinationRepo);
+    if (!repoMatch && token) {
+      try {
+        const latestRepos = await getUserRepos(token);
+        repoMatch = latestRepos.find((r) => r.full_name === cloneResult.destinationRepo);
+      } catch {
+        // fallback silently
+      }
+    }
     if (repoMatch) {
-      selectRepo(repoMatch);
+      await selectRepo(repoMatch);
     }
     setView('file-manager');
   };
@@ -597,7 +634,7 @@ export const RepoClonerView: React.FC = () => {
                   </label>
                   <select
                     value={selectedExistingRepoId || ''}
-                    onChange={(e) => setSelectedExistingRepoId(Number(e.target.value))}
+                    onChange={(e) => handleSelectExistingRepo(Number(e.target.value))}
                     disabled={isCloning}
                     className="w-full px-4 py-2.5 rounded-xl text-xs font-mono bg-white dark:bg-[#0E1528] border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white focus:outline-hidden focus:border-indigo-500"
                   >
@@ -612,16 +649,32 @@ export const RepoClonerView: React.FC = () => {
 
                 <div>
                   <label className="block text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Cabang Git Target:
+                    Cabang Git Target (otomatis menyesuaikan cabang repo atau buat baru):
                   </label>
-                  <input
-                    type="text"
-                    value={selectedTargetBranch}
-                    onChange={(e) => setSelectedTargetBranch(e.target.value)}
-                    placeholder="main"
-                    disabled={isCloning}
-                    className="w-full px-4 py-2.5 rounded-xl text-xs font-mono bg-white dark:bg-[#0E1528] border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white focus:outline-hidden focus:border-indigo-500"
-                  />
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={selectedTargetBranch}
+                      onChange={(e) => setSelectedTargetBranch(e.target.value)}
+                      placeholder="main"
+                      disabled={isCloning}
+                      className="flex-1 px-4 py-2.5 rounded-xl text-xs font-mono bg-white dark:bg-[#0E1528] border border-slate-300 dark:border-white/10 text-slate-900 dark:text-white focus:outline-hidden focus:border-indigo-500"
+                    />
+                    {existingRepoBranches.length > 0 && (
+                      <select
+                        value={selectedTargetBranch}
+                        onChange={(e) => setSelectedTargetBranch(e.target.value)}
+                        disabled={isCloning}
+                        className="px-3 py-2.5 rounded-xl text-xs font-mono bg-white dark:bg-[#0E1528] border border-slate-300 dark:border-white/10 text-indigo-600 dark:text-indigo-300 focus:outline-hidden focus:border-indigo-500"
+                      >
+                        {existingRepoBranches.map((b) => (
+                          <option key={b.name} value={b.name}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

@@ -49,6 +49,13 @@ function parseRateLimitHeaders(headers: Headers): RateLimitInfo | undefined {
   return undefined;
 }
 
+function encodeBranchPath(branch: string): string {
+  return branch
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
 // Request helper with standard GitHub API headers
 async function githubFetch<T>(
   endpoint: string,
@@ -56,7 +63,7 @@ async function githubFetch<T>(
   options: RequestInit = {}
 ): Promise<{ data: T; headers: Headers; rateLimit?: RateLimitInfo }> {
   const url = endpoint.startsWith('https://') ? endpoint : `${GITHUB_API_BASE}${endpoint}`;
-  
+
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', `Bearer ${token.trim()}`);
   headers.set('Accept', 'application/vnd.github+json');
@@ -64,6 +71,7 @@ async function githubFetch<T>(
 
   try {
     const response = await fetch(url, {
+      cache: 'no-store',
       ...options,
       headers,
     });
@@ -78,21 +86,30 @@ async function githubFetch<T>(
         errorBody = await response.text();
       }
 
-      let message = `GitHub API request failed with status ${response.status}`;
+      let apiMessage = '';
       if (errorBody && typeof errorBody === 'object' && 'message' in errorBody) {
-        message = String((errorBody as { message: string }).message);
+        apiMessage = String((errorBody as { message: string }).message || '').trim();
       }
 
+      let message = apiMessage || `GitHub API request failed with status ${response.status}`;
+
       if (response.status === 401) {
-        message = 'Invalid or expired Personal Access Token (401 Unauthorized).';
+        message = 'Token GitHub tidak valid atau telah kedaluwarsa (401 Unauthorized).';
       } else if (response.status === 403 && rateLimit && rateLimit.remaining === 0) {
-        message = `GitHub API rate limit exceeded. Resets at ${new Date(rateLimit.reset * 1000).toLocaleTimeString()}.`;
+        message = `Batas kuota GitHub API tercapai. Reset pada ${new Date(rateLimit.reset * 1000).toLocaleTimeString()}.`;
       } else if (response.status === 403) {
-        message = 'Forbidden (403): Token lacks permission or resource is restricted.';
+        message = apiMessage
+          ? `Akses ditolak (403): ${apiMessage}`
+          : 'Akses ditolak (403): Token tidak memiliki izin yang dibutuhkan.';
       } else if (response.status === 404) {
-        message = 'Resource not found (404). Check repository name or branch.';
+        message =
+          apiMessage && apiMessage.toLowerCase() !== 'not found'
+            ? `Tidak ditemukan (404): ${apiMessage}`
+            : 'Resource tidak ditemukan (404). Periksa nama repositori, cabang (branch), atau izin akses token Anda.';
       } else if (response.status === 409) {
-        message = 'Conflict detected (409): The file or branch was modified by another operation.';
+        message = apiMessage
+          ? `Konflik / status repositori (409): ${apiMessage}`
+          : 'Konflik terdeteksi (409): Berkas atau cabang telah berubah.';
       }
 
       throw new GitHubApiError(message, response.status, errorBody);
@@ -224,12 +241,27 @@ export async function createRepo(
 }
 
 /**
- * Delete a repository (Requires `delete_repo` scope)
+ * Delete a repository (Requires `delete_repo` scope for Classic PAT or Administration write for Fine-Grained PAT)
  */
 export async function deleteRepo(token: string, owner: string, repo: string): Promise<void> {
-  await githubFetch<void>(`/repos/${owner}/${repo}`, token, {
-    method: 'DELETE',
-  });
+  try {
+    await githubFetch<void>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      token,
+      {
+        method: 'DELETE',
+      }
+    );
+  } catch (err) {
+    if (err instanceof GitHubApiError && (err.status === 403 || err.status === 404)) {
+      throw new GitHubApiError(
+        `Gagal menghapus repositori '${owner}/${repo}' (${err.status}). Pastikan token PAT Anda memiliki izin/scope "delete_repo" (Classic PAT) atau "Administration: Read & write" (Fine-grained PAT) serta hak Admin di repositori ini.`,
+        err.status,
+        err.data
+      );
+    }
+    throw err;
+  }
 }
 
 /**
@@ -302,13 +334,31 @@ export async function getGitTree(
   token: string,
   owner: string,
   repo: string,
-  treeShaOrBranch: string
+  treeShaOrBranch: string,
+  recursive = true
 ): Promise<{ sha: string; tree: GitTreeItem[]; truncated: boolean }> {
+  const refEncoded = encodeBranchPath(treeShaOrBranch);
   const { data } = await githubFetch<{ sha: string; tree: GitTreeItem[]; truncated: boolean }>(
-    `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeShaOrBranch)}?recursive=1`,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${refEncoded}${recursive ? '?recursive=1' : ''}`,
     token
   );
   return data;
+}
+
+/**
+ * Check if a branch ref exists and return its HEAD commit SHA
+ */
+export async function getBranchRefSha(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string
+): Promise<string> {
+  const { data } = await githubFetch<{ object: { sha: string } }>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeBranchPath(branch)}`,
+    token
+  );
+  return data.object.sha;
 }
 
 /**
@@ -492,38 +542,50 @@ export async function createBatchCommit(
   repo: string,
   branch: string,
   treeEntries: TreeEntryInput[],
-  commitMessage: string
+  commitMessage: string,
+  options?: { replaceTree?: boolean }
 ): Promise<{ commitSha: string; commitUrl: string }> {
+  const encodedOwner = encodeURIComponent(owner);
+  const encodedRepo = encodeURIComponent(repo);
+  const encodedBranch = encodeBranchPath(branch);
+
   // 1. Get branch reference to find current HEAD commit
   const { data: refData } = await githubFetch<{ object: { sha: string } }>(
-    `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+    `/repos/${encodedOwner}/${encodedRepo}/git/ref/heads/${encodedBranch}`,
     token
   );
   const headCommitSha = refData.object.sha;
 
-  // 2. Get HEAD commit to find base tree SHA
-  const { data: commitData } = await githubFetch<{ tree: { sha: string } }>(
-    `/repos/${owner}/${repo}/git/commits/${headCommitSha}`,
-    token
-  );
-  const baseTreeSha = commitData.tree.sha;
+  // 2. Get HEAD commit to find base tree SHA (only needed when merging instead of replacing)
+  let baseTreeSha: string | undefined;
+  if (!options?.replaceTree) {
+    const { data: commitData } = await githubFetch<{ tree: { sha: string } }>(
+      `/repos/${encodedOwner}/${encodedRepo}/git/commits/${headCommitSha}`,
+      token
+    );
+    baseTreeSha = commitData.tree.sha;
+  }
 
-  // 3. Create new Tree on top of base_tree
+  // 3. Create new Tree (without base_tree when replaceTree is true for an exact 1:1 tree)
+  const treePayload: Record<string, unknown> = {
+    tree: treeEntries,
+  };
+  if (baseTreeSha) {
+    treePayload.base_tree = baseTreeSha;
+  }
+
   const { data: newTree } = await githubFetch<{ sha: string }>(
-    `/repos/${owner}/${repo}/git/trees`,
+    `/repos/${encodedOwner}/${encodedRepo}/git/trees`,
     token,
     {
       method: 'POST',
-      body: JSON.stringify({
-        base_tree: baseTreeSha,
-        tree: treeEntries,
-      }),
+      body: JSON.stringify(treePayload),
     }
   );
 
   // 4. Create new Commit
   const { data: newCommit } = await githubFetch<{ sha: string; html_url: string }>(
-    `/repos/${owner}/${repo}/git/commits`,
+    `/repos/${encodedOwner}/${encodedRepo}/git/commits`,
     token,
     {
       method: 'POST',
@@ -537,7 +599,7 @@ export async function createBatchCommit(
 
   // 5. Update branch reference to point to new commit
   await githubFetch(
-    `/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`,
+    `/repos/${encodedOwner}/${encodedRepo}/git/refs/heads/${encodedBranch}`,
     token,
     {
       method: 'PATCH',

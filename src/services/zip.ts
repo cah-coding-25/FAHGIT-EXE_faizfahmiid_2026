@@ -132,8 +132,38 @@ export async function analyzeZipArchive(file: File): Promise<ZipAnalysis> {
       }
     }
 
+    // Deteksi dan hapus folder pembungkus utama tunggal (misal: fahnote.zip -> fahnote/...)
+    // agar berkas dan sub-folder di dalamnya langsung masuk ke repositori
+    const fileItems = items.filter((i) => !i.isDirectory);
+    let finalItems = items;
+
+    if (fileItems.length > 0 && fileItems.every((i) => i.path.includes('/'))) {
+      const firstSegment = fileItems[0].path.split('/')[0];
+      const allShareSameRoot = fileItems.every((i) => i.path.split('/')[0] === firstSegment);
+
+      if (allShareSameRoot && firstSegment) {
+        const prefixToStrip = `${firstSegment}/`;
+        finalItems = items
+          .map((item) => {
+            if (item.path === firstSegment) {
+              return null;
+            }
+            if (item.path.startsWith(prefixToStrip)) {
+              const strippedPath = item.path.slice(prefixToStrip.length);
+              if (!strippedPath) return null;
+              return { ...item, path: strippedPath };
+            }
+            return item;
+          })
+          .filter((item): item is ExtractedZipItem => item !== null);
+      }
+    }
+
+    const finalFolders = finalItems.filter((i) => i.isDirectory).length;
+    const finalFiles = finalItems.filter((i) => !i.isDirectory).length;
+
     // Sort items so folders come first, then alphabetical
-    items.sort((a, b) => {
+    finalItems.sort((a, b) => {
       if (a.isDirectory && !b.isDirectory) return -1;
       if (!a.isDirectory && b.isDirectory) return 1;
       return a.path.localeCompare(b.path);
@@ -141,10 +171,10 @@ export async function analyzeZipArchive(file: File): Promise<ZipAnalysis> {
 
     return {
       isValid: true,
-      totalFiles,
-      totalFolders,
+      totalFiles: finalFiles,
+      totalFolders: finalFolders,
       totalSize,
-      items,
+      items: finalItems,
     };
   } catch (err) {
     return {
@@ -162,12 +192,16 @@ export async function analyzeZipArchive(file: File): Promise<ZipAnalysis> {
  * Generate a ZIP blob from files for user download
  */
 export async function createZipFromFiles(
-  files: Array<{ path: string; data: Uint8Array | string }>
+  files: Array<{ path: string; data: Uint8Array | string; isBase64?: boolean }>
 ): Promise<Blob> {
   const zip = new JSZip();
 
   for (const file of files) {
-    zip.file(file.path, file.data);
+    if (file.isBase64 && typeof file.data === 'string') {
+      zip.file(file.path, file.data.replace(/\s/g, ''), { base64: true });
+    } else {
+      zip.file(file.path, file.data);
+    }
   }
 
   return await zip.generateAsync({

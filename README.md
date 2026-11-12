@@ -37,8 +37,8 @@ FAHGIT menerapkan engine adaptif 5-tier untuk menangani kondisi jaringan secara 
 ## 3. Sistem Permanent Auto-Update Terintegrasi
 
 Aplikasi desktop dilengkapi dengan auto-update permanen dari GitHub Releases:
-- **Penyedia**: GitHub Releases (`FaizFahmiID/fahgit`).
-- **Pengecekan Otomatis**: Dilakukan saat aplikasi pertama kali dibuka dan dapat dipicu manual melalui tombol *Periksa Pembaruan* di pengaturan.
+- **Penyedia**: GitHub Releases (`ghfghjk94-hash/fahgirexe_update`).
+- **Pengecekan Otomatis**: Dilakukan secara ketat hanya **satu kali saat aplikasi pertama kali dibuka** dan hanya menampilkan modal apabila terdapat versi SemVer baru di atas `v1.0.0`.
 - **Modal Interaktif Wajib**:
   - Menampilkan nama aplikasi: `FAHGIT by: Faiz_Fahmi_ID`.
   - Versi saat ini vs Versi terbaru yang tersedia.

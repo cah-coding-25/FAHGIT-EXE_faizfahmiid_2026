@@ -12,7 +12,6 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
 import { UpdateInfoPayload, DownloadProgressPayload } from '../../types/electron';
 import {
   Sparkles,
@@ -21,14 +20,52 @@ import {
   CheckCircle2,
   AlertCircle,
   RotateCcw,
-  ExternalLink,
   ShieldCheck,
   Calendar,
   HardDrive,
 } from 'lucide-react';
 
+const CURRENT_APP_VERSION = '1.0.0';
+const BASELINE_RELEASE_MS = Date.parse('2026-11-12T00:00:00Z');
+const SESSION_DISMISS_KEY = 'fahgit_update_dismissed_v1';
+
+// Module-level guard: hanya boleh tampil 1 kali saat aplikasi pertama kali dibuka
+let hasHandledUpdateThisLaunch = false;
+
+function isStrictNewerSemver(current: string, target: string): boolean {
+  const cClean = current.replace(/^v/i, '').trim();
+  const tClean = target.replace(/^v/i, '').trim();
+  if (!/^\d+\.\d+\.\d+$/.test(cClean) || !/^\d+\.\d+\.\d+$/.test(tClean)) return false;
+
+  const c = cClean.split('.').map(Number);
+  const t = tClean.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((t[i] || 0) > (c[i] || 0)) return true;
+    if ((t[i] || 0) < (c[i] || 0)) return false;
+  }
+  return false;
+}
+
+function cleanReleaseNotesText(raw?: string): string {
+  if (!raw || typeof raw !== 'string') {
+    return 'Pembaruan stabilitas dan peningkatan performa.';
+  }
+  return raw
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6]|li|ul|ol)>/gi, '\n')
+    .replace(/<\s*li[^>]*>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export const UpdateModal: React.FC = () => {
-  const { token } = useApp();
   const [updateInfo, setUpdateInfo] = useState<UpdateInfoPayload | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -36,108 +73,71 @@ export const UpdateModal: React.FC = () => {
   const [isReadyToInstall, setIsReadyToInstall] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
 
-  // Trigger auto check with token for private or public repos
   useEffect(() => {
-    if (window.electronAPI) {
-      const timer = setTimeout(() => {
-        window.electronAPI?.checkForUpdates(token || undefined);
-      }, 2500);
-      return () => clearTimeout(timer);
-    }
-  }, [token]);
+    // Hanya aktif pada aplikasi Desktop Electron & hanya 1x saat aplikasi pertama kali dibuka
+    if (!window.electronAPI || hasHandledUpdateThisLaunch) return;
 
-  useEffect(() => {
-    // Check if dismissed in this session
-    const isDismissed = sessionStorage.getItem('fahgit_update_dismissed');
+    const isDismissed = sessionStorage.getItem(SESSION_DISMISS_KEY);
 
-    // 1. Electron IPC Listener
-    if (window.electronAPI) {
-      const unsubAvailable = window.electronAPI.onUpdateAvailable((info) => {
-        if (isDismissed === info.latestVersion) return;
-        setUpdateInfo(info);
-        setIsOpen(true);
+    const unsubAvailable = window.electronAPI.onUpdateAvailable((info) => {
+      if (hasHandledUpdateThisLaunch) return;
+
+      const latestClean = (info.latestVersion || '').replace(/^v/i, '').trim();
+      const currentClean = (info.currentVersion || CURRENT_APP_VERSION).replace(/^v/i, '').trim();
+
+      // Validasi ketat: versi harus lebih tinggi dari v1.0.0 dan tanggal rilis setelah baseline
+      if (!isStrictNewerSemver(currentClean, latestClean)) return;
+      const releaseMs = Date.parse(info.releaseDate || '');
+      if (Number.isNaN(releaseMs) || releaseMs < BASELINE_RELEASE_MS) return;
+
+      if (isDismissed === latestClean || isDismissed === 'closed') return;
+
+      hasHandledUpdateThisLaunch = true;
+      setUpdateInfo({
+        ...info,
+        currentVersion: currentClean,
+        latestVersion: latestClean,
+        releaseNotes: cleanReleaseNotesText(info.releaseNotes),
       });
+      setIsOpen(true);
+    });
 
-      const unsubProgress = window.electronAPI.onDownloadProgress((progress) => {
-        setIsDownloading(true);
-        setDownloadProgress(progress);
-      });
+    const unsubProgress = window.electronAPI.onDownloadProgress((progress) => {
+      setIsDownloading(true);
+      setDownloadProgress(progress);
+    });
 
-      const unsubDownloaded = () => {
-        setIsDownloading(false);
-        setIsReadyToInstall(true);
-      };
-      const cleanupDownloaded = window.electronAPI.onUpdateDownloaded(unsubDownloaded);
+    const cleanupDownloaded = window.electronAPI.onUpdateDownloaded(() => {
+      setIsDownloading(false);
+      setIsReadyToInstall(true);
+    });
 
-      const unsubError = window.electronAPI.onUpdateError((err) => {
-        setIsDownloading(false);
-        setUpdateError(err);
-      });
+    const unsubError = window.electronAPI.onUpdateError((err) => {
+      setIsDownloading(false);
+      setUpdateError(err);
+    });
 
-      return () => {
-        unsubAvailable();
-        unsubProgress();
-        cleanupDownloaded();
-        unsubError();
-      };
-    } else {
-      // 2. Web / Browser direct check fallback
-      const checkWebRelease = async () => {
-        const endpoints = [
-          'https://api.github.com/repos/ghfghjk94-hash/fahgirexe_update/releases/latest',
-          'https://api.github.com/repos/FaizFahmiID/fahgit/releases/latest',
-        ];
-        let release = null;
-        for (const ep of endpoints) {
-          try {
-            const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
-            if (token) headers['Authorization'] = `token ${token}`;
-            const res = await fetch(ep, { headers });
-            if (res.ok) {
-              release = await res.json();
-              break;
-            }
-          } catch {
-            // try next
-          }
-        }
-        if (!release) return;
-        const latestVersion = (release.tag_name || '').replace(/^v/, '');
-        const currentVersion = '1.0.0';
-
-        if (isDismissed === latestVersion) return;
-
-        // Compare semver
-        const c = currentVersion.split('.').map(Number);
-        const t = latestVersion.split('.').map(Number);
-        const isNewer = t[0] > c[0] || (t[0] === c[0] && t[1] > c[1]) || (t[0] === c[0] && t[1] === c[1] && t[2] > c[2]);
-
-        if (isNewer) {
-          setUpdateInfo({
-            currentVersion,
-            latestVersion,
-            releaseName: release.name || `FAHGIT v${latestVersion}`,
-            releaseNotes: release.body || 'Pembaruan aplikasi desktop & web.',
-            releaseDate: release.published_at || new Date().toISOString(),
-            downloadUrl: release.html_url,
-            downloadSize: 0,
-          });
-          setIsOpen(true);
-        }
-      };
-
-      checkWebRelease().catch(() => {});
-    }
+    return () => {
+      unsubAvailable();
+      unsubProgress();
+      cleanupDownloaded();
+      unsubError();
+    };
   }, []);
 
   const handleSkip = () => {
+    hasHandledUpdateThisLaunch = true;
     if (updateInfo) {
-      sessionStorage.setItem('fahgit_update_dismissed', updateInfo.latestVersion);
+      sessionStorage.setItem(SESSION_DISMISS_KEY, updateInfo.latestVersion);
+    } else {
+      sessionStorage.setItem(SESSION_DISMISS_KEY, 'closed');
     }
     setIsOpen(false);
   };
 
   const handleClose = () => {
+    hasHandledUpdateThisLaunch = true;
+    sessionStorage.setItem(SESSION_DISMISS_KEY, updateInfo?.latestVersion || 'closed');
     setIsOpen(false);
   };
 
@@ -151,9 +151,6 @@ export const UpdateModal: React.FC = () => {
         setIsDownloading(false);
         setIsOpen(false);
       }
-    } else if (updateInfo?.downloadUrl) {
-      window.open(updateInfo.downloadUrl, '_blank', 'noopener,noreferrer');
-      setIsOpen(false);
     }
   };
 

@@ -33,9 +33,11 @@ import {
 export const RepositoriesView: React.FC = () => {
   const {
     token,
+    scopes,
     repos,
     isLoadingRepos,
     refreshRepos,
+    removeRepoLocally,
     activeRepo,
     selectRepo,
     setView,
@@ -48,10 +50,12 @@ export const RepositoriesView: React.FC = () => {
   const [filterType, setFilterType] = useState<'all' | 'public' | 'private' | 'archived'>('all');
   const [sortBy, setSortBy] = useState<'updated' | 'name' | 'created'>('updated');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoDesc, setNewRepoDesc] = useState('');
   const [newRepoPrivate, setNewRepoPrivate] = useState(false);
@@ -63,6 +67,7 @@ export const RepositoriesView: React.FC = () => {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Filter & Sort Repos
   const filteredRepos = repos
@@ -96,6 +101,8 @@ export const RepositoriesView: React.FC = () => {
     if (!token || !newRepoName.trim()) return;
 
     setIsCreating(true);
+    setCreateError(null);
+    setActionFeedback(null);
     try {
       const created = await createRepo(token, {
         name: newRepoName.trim(),
@@ -106,13 +113,19 @@ export const RepositoriesView: React.FC = () => {
       });
 
       notify('success', `Repositori ${created.name} berhasil dibuat!`, 'Berhasil Dibuat');
+      setActionFeedback({
+        type: 'success',
+        message: `Repositori '${created.full_name}' berhasil dibuat!`,
+      });
       setIsCreateOpen(false);
       setNewRepoName('');
       setNewRepoDesc('');
       await refreshRepos();
       await handleOpenRepo(created);
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal membuat repositori baru', 'Gagal');
+      const msg = err instanceof Error ? err.message : 'Gagal membuat repositori baru';
+      setCreateError(msg);
+      notify('error', msg, 'Gagal');
     } finally {
       setIsCreating(false);
     }
@@ -121,31 +134,45 @@ export const RepositoriesView: React.FC = () => {
   // Delete repository execution
   const handleDeleteExecute = async () => {
     if (!token || !deleteTarget) return;
-    if (deleteConfirmText !== deleteTarget.name) {
-      notify('error', 'Konfirmasi nama repositori tidak cocok.', 'Verifikasi Gagal');
+    if (deleteConfirmText.trim() !== deleteTarget.name) {
+      setDeleteError('Konfirmasi nama repositori tidak cocok.');
       return;
     }
 
     setIsDeleting(true);
+    setDeleteError(null);
+    setActionFeedback(null);
+    const targetToDelete = deleteTarget;
+
     try {
-      await deleteRepo(token, deleteTarget.owner.login, deleteTarget.name);
-      notify('success', `Repositori ${deleteTarget.full_name} telah dihapus permanen.`, 'Berhasil Dihapus');
+      await deleteRepo(token, targetToDelete.owner.login, targetToDelete.name);
+      await removeRepoLocally(targetToDelete);
+      notify('success', `Repositori ${targetToDelete.full_name} telah dihapus permanen.`, 'Berhasil Dihapus');
+      setActionFeedback({
+        type: 'success',
+        message: `Repositori '${targetToDelete.full_name}' telah dihapus permanen dari GitHub.`,
+      });
       setDeleteTarget(null);
       setDeleteConfirmText('');
       setDeleteStep(1);
-      await refreshRepos();
+      setTimeout(() => {
+        refreshRepos();
+      }, 1000);
     } catch (err) {
-      notify(
-        'error',
+      const msg =
         err instanceof Error
           ? err.message
-          : 'Gagal menghapus repositori. Pastikan token Anda memiliki izin "delete_repo".',
-        'Gagal Menghapus'
-      );
+          : 'Gagal menghapus repositori. Pastikan token Anda memiliki izin "delete_repo".';
+      setDeleteError(msg);
+      notify('error', msg, 'Gagal Menghapus');
     } finally {
       setIsDeleting(false);
     }
   };
+
+  const hasClassicScopeInfo = scopes.length > 0;
+  const missingDeleteScope = hasClassicScopeInfo && !scopes.includes('delete_repo');
+  const lacksAdminRight = deleteTarget?.permissions ? !deleteTarget.permissions.admin : false;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -163,7 +190,7 @@ export const RepositoriesView: React.FC = () => {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={refreshRepos}
+            onClick={() => refreshRepos()}
             disabled={isLoadingRepos}
             className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-200 dark:bg-[#172033] hover:bg-slate-300 dark:hover:bg-slate-700/80 transition-colors border border-slate-300 dark:border-white/10 clay-button-rgb"
           >
@@ -172,14 +199,38 @@ export const RepositoriesView: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setIsCreateOpen(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold text-slate-950 bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 hover:opacity-95 text-white transition-all clay-button-rgb shadow-md"
+            onClick={() => {
+              setCreateError(null);
+              setIsCreateOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 hover:opacity-95 text-white transition-all clay-button-rgb shadow-md"
           >
             <Plus className="w-4 h-4" />
             <span>Repositori Baru</span>
           </button>
         </div>
       </div>
+
+      {/* Inline Feedback Banner */}
+      {actionFeedback && (
+        <div
+          className={`clay-card rounded-2xl p-4 border flex items-center justify-between gap-3 text-xs ${
+            actionFeedback.type === 'success'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+              : 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+          }`}
+        >
+          <span className="font-medium leading-relaxed">{actionFeedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            className="p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 shrink-0"
+            aria-label="Tutup pesan"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Filter & Search Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 clay-card p-4 rounded-3xl">
@@ -350,6 +401,7 @@ export const RepositoriesView: React.FC = () => {
                     onClick={() => {
                       setDeleteTarget(repo);
                       setDeleteConfirmText('');
+                      setDeleteError(null);
                       setDeleteStep(1);
                     }}
                     className="p-2 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
@@ -424,6 +476,7 @@ export const RepositoriesView: React.FC = () => {
                     onClick={() => {
                       setDeleteTarget(repo);
                       setDeleteConfirmText('');
+                      setDeleteError(null);
                       setDeleteStep(1);
                     }}
                     className="p-1 text-slate-500 hover:text-red-400 transition-colors"
@@ -522,17 +575,17 @@ export const RepositoriesView: React.FC = () => {
                     type="checkbox"
                     checked={newRepoInitReadme}
                     onChange={(e) => setNewRepoInitReadme(e.target.checked)}
-                    className="rounded border-slate-700 text-cyan-500 focus:ring-0 bg-slate-900 w-4 h-4"
+                    className="rounded border-slate-400 dark:border-slate-700 text-cyan-500 focus:ring-0 bg-white dark:bg-slate-900 w-4 h-4"
                   />
-                  <span className="text-slate-300">Inisialisasi repositori dengan file README.md</span>
+                  <span className="text-slate-700 dark:text-slate-300">Inisialisasi repositori dengan file README.md</span>
                 </label>
 
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Templat .gitignore</label>
+                  <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">Templat .gitignore</label>
                   <select
                     value={newRepoGitignore}
                     onChange={(e) => setNewRepoGitignore(e.target.value)}
-                    className="w-full bg-[#0F172A] border border-white/10 rounded-2xl px-3 py-1.5 text-slate-200 focus:outline-hidden focus:border-cyan-400"
+                    className="w-full bg-white dark:bg-[#0F172A] border border-slate-300 dark:border-white/10 rounded-2xl px-3 py-1.5 text-slate-900 dark:text-slate-200 focus:outline-hidden focus:border-cyan-400"
                   >
                     <option value="None">Tidak ada</option>
                     <option value="Node">Node.js</option>
@@ -544,11 +597,17 @@ export const RepositoriesView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+              {createError && (
+                <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 dark:text-rose-300 text-xs">
+                  {createError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-white/10">
                 <button
                   type="button"
                   onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 rounded-full text-slate-300 hover:text-white"
+                  className="px-4 py-2 rounded-full text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
                 >
                   Batal
                 </button>
@@ -589,6 +648,34 @@ export const RepositoriesView: React.FC = () => {
               </p>
             </div>
 
+            {(missingDeleteScope || lacksAdminRight) && (
+              <div className="p-3 bg-amber-500/15 border border-amber-500/40 rounded-2xl text-[11px] text-amber-800 dark:text-amber-200 space-y-1.5">
+                <strong className="block font-bold">Peringatan Izin Penghapusan:</strong>
+                {lacksAdminRight ? (
+                  <p>Akun Anda tidak memiliki hak akses Admin pada repositori ini sehingga GitHub dapat menolak penghapusan.</p>
+                ) : (
+                  <p>
+                    Token PAT Anda saat ini memiliki scope: <code className="font-mono">{scopes.join(', ')}</code> — izin <code className="font-mono font-bold">delete_repo</code> belum aktif. Aktifkan izin <code className="font-mono">delete_repo</code> di pengaturan token GitHub agar penghapusan berhasil.
+                  </p>
+                )}
+                <a
+                  href="https://github.com/settings/tokens"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 font-bold underline text-amber-700 dark:text-amber-300"
+                >
+                  <span>Buka Pengaturan Token GitHub</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            )}
+
+            {deleteError && (
+              <div className="p-3 bg-rose-500/15 border border-rose-500/40 rounded-2xl text-xs text-rose-600 dark:text-rose-300 leading-relaxed">
+                {deleteError}
+              </div>
+            )}
+
             {deleteStep === 1 ? (
               <div className="space-y-3 text-xs">
                 <p className="text-slate-700 dark:text-slate-300">
@@ -597,7 +684,10 @@ export const RepositoriesView: React.FC = () => {
                 <input
                   type="text"
                   value={deleteConfirmText}
-                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  onChange={(e) => {
+                    setDeleteConfirmText(e.target.value);
+                    setDeleteError(null);
+                  }}
                   placeholder="Ketik nama repositori di sini"
                   className="w-full bg-white dark:bg-[#0F172A] border border-red-400 dark:border-red-500/40 rounded-2xl px-3.5 py-2 text-slate-900 dark:text-white font-mono focus:outline-hidden focus:border-red-500 text-xs"
                 />
@@ -605,15 +695,21 @@ export const RepositoriesView: React.FC = () => {
                 <div className="flex items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setDeleteTarget(null)}
+                    onClick={() => {
+                      setDeleteTarget(null);
+                      setDeleteError(null);
+                    }}
                     className="px-4 py-2 rounded-full text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
                   >
                     Batal
                   </button>
                   <button
                     type="button"
-                    disabled={deleteConfirmText !== deleteTarget.name}
-                    onClick={() => setDeleteStep(2)}
+                    disabled={deleteConfirmText.trim() !== deleteTarget.name}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteStep(2);
+                    }}
                     className="px-4 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-bold disabled:opacity-50 transition-colors shadow-md"
                   >
                     Lanjut ke Konfirmasi Akhir
@@ -629,8 +725,12 @@ export const RepositoriesView: React.FC = () => {
                 <div className="flex items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setDeleteStep(1)}
-                    className="px-4 py-2 rounded-full text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteStep(1);
+                    }}
+                    disabled={isDeleting}
+                    className="px-4 py-2 rounded-full text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white disabled:opacity-50"
                   >
                     Kembali
                   </button>

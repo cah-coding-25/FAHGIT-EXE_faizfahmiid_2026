@@ -13,7 +13,7 @@
 
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { createGitBlob, createBatchCommit, createRepo } from '../../services/github';
+import { createGitBlob, createBatchCommit, createRepo, saveFile, getBranchRefSha } from '../../services/github';
 import { analyzeZipArchive, ZipAnalysis } from '../../services/zip';
 import { uint8ArrayToBase64, formatFileSize } from '../../utils/fileUtils';
 import { FileIcon } from '../common/FileIcon';
@@ -35,6 +35,7 @@ import {
   Globe,
   Loader2,
   ArrowRight,
+  AlertCircle,
 } from 'lucide-react';
 
 interface QueuedFile {
@@ -48,6 +49,75 @@ interface QueuedFile {
   error?: string;
 }
 
+// Hapus folder pembungkus utama tunggal agar berkas di dalamnya langsung masuk ke repositori
+function stripCommonOuterFolder(paths: string[]): string[] {
+  if (paths.length === 0) return paths;
+  if (!paths.every((p) => p.includes('/'))) return paths;
+
+  const firstSeg = paths[0].split('/')[0];
+  if (!firstSeg) return paths;
+
+  const allSameOuter = paths.every((p) => p.split('/')[0] === firstSeg);
+  if (!allSameOuter) return paths;
+
+  const prefix = `${firstSeg}/`;
+  return paths.map((p) => p.slice(prefix.length));
+}
+
+// Baca rekursif seluruh entri folder dari Drag & Drop
+async function readDroppedEntries(dataTransfer: DataTransfer): Promise<Array<{ file: File; relativePath: string }>> {
+  const results: Array<{ file: File; relativePath: string }> = [];
+
+  const traverseEntry = async (entry: FileSystemEntry, parentPath = ''): Promise<void> => {
+    if (entry.isFile) {
+      const fileEntry = entry as FileSystemFileEntry;
+      const file = await new Promise<File>((resolve, reject) => fileEntry.file(resolve, reject));
+      const fullPath = parentPath ? `${parentPath}/${file.name}` : file.name;
+      results.push({ file, relativePath: fullPath });
+    } else if (entry.isDirectory) {
+      const dirEntry = entry as FileSystemDirectoryEntry;
+      const reader = dirEntry.createReader();
+      const readAllEntries = async (): Promise<FileSystemEntry[]> => {
+        const all: FileSystemEntry[] = [];
+        while (true) {
+          const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+          if (batch.length === 0) break;
+          all.push(...batch);
+        }
+        return all;
+      };
+      const entries = await readAllEntries();
+      const nextParent = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+      for (const child of entries) {
+        await traverseEntry(child, nextParent);
+      }
+    }
+  };
+
+  if (dataTransfer.items && dataTransfer.items.length > 0) {
+    const entries: FileSystemEntry[] = [];
+    for (let i = 0; i < dataTransfer.items.length; i++) {
+      const item = dataTransfer.items[i];
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) entries.push(entry);
+    }
+
+    if (entries.length > 0) {
+      for (const entry of entries) {
+        await traverseEntry(entry, '');
+      }
+      return results;
+    }
+  }
+
+  for (let i = 0; i < dataTransfer.files.length; i++) {
+    const f = dataTransfer.files[i];
+    const rel = (f as { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    results.push({ file: f, relativePath: rel });
+  }
+  return results;
+}
+
 export const UploadCenterView: React.FC = () => {
   const {
     token,
@@ -59,7 +129,6 @@ export const UploadCenterView: React.FC = () => {
     selectBranch,
     refreshRepos,
     currentPath,
-    refreshTree,
     notify,
   } = useApp();
 
@@ -72,6 +141,7 @@ export const UploadCenterView: React.FC = () => {
   const [commitMessage, setCommitMessage] = useState('Unggah berkas melalui FAHGIT');
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
+  const [uploadFeedback, setUploadFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Status ZIP Terdeteksi
   const [selectedZipFile, setSelectedZipFile] = useState<File | null>(null);
@@ -88,39 +158,66 @@ export const UploadCenterView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  // Tambahkan file ke antrean
-  const addFilesToQueue = (files: FileList | File[]) => {
+  // Tambahkan daftar berkas (dengan penghapusan otomatis folder pembungkus luar jika dari folder)
+  const processIncomingItems = (entries: Array<{ file: File; relativePath: string }>, fromFolder: boolean) => {
+    setUploadFeedback(null);
+
+    const filtered = entries.filter(({ file, relativePath }) => {
+      if (relativePath.includes('__MACOSX/') || relativePath.endsWith('.DS_Store')) return false;
+      if (
+        file.name.startsWith('.') &&
+        file.name !== '.gitkeep' &&
+        file.name !== '.gitignore' &&
+        file.name !== '.env'
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) return;
+
+    // Jika berasal dari folder picker atau drag-drop folder, hapus folder pembungkus utama
+    const rawPaths = filtered.map((e) => e.relativePath.replace(/\\/g, '/').replace(/^\/+/, ''));
+    const normalizedPaths = fromFolder || rawPaths.every((p) => p.includes('/'))
+      ? stripCommonOuterFolder(rawPaths)
+      : rawPaths;
+
     const newItems: QueuedFile[] = [];
 
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      // Lewati file sistem tersembunyi yang tidak perlu
-      if (
-        f.name.startsWith('.') &&
-        f.name !== '.gitkeep' &&
-        f.name !== '.gitignore' &&
-        f.name !== '.env'
-      ) {
-        continue;
-      }
+    filtered.forEach(({ file }, i) => {
+      const cleanRel = normalizedPaths[i];
+      if (!cleanRel) return;
 
-      // Jika berkas merupakan .ZIP, analisis secara otomatis untuk ekstraksi instan
-      if (f.name.toLowerCase().endsWith('.zip')) {
-        handleZipFileSelect(f);
+      // Jika berkas adalah arsip .ZIP (dan bukan dari dalam folder), analisis otomatis untuk ekstraksi
+      if (!fromFolder && file.name.toLowerCase().endsWith('.zip')) {
+        handleZipFileSelect(file);
+        return;
       }
-
-      const rel = (f as { webkitRelativePath?: string }).webkitRelativePath || f.name;
 
       newItems.push({
         id: `q_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
-        file: f,
-        relativePath: rel,
-        size: f.size,
+        file,
+        relativePath: cleanRel,
+        size: file.size,
         status: 'pending',
       });
-    }
+    });
 
-    setQueue((prev) => [...prev, ...newItems]);
+    if (newItems.length > 0) {
+      setQueue((prev) => [...prev, ...newItems]);
+    }
+  };
+
+  // Tambahkan file dari FileList input
+  const addFilesToQueue = (files: FileList | File[], fromFolder = false) => {
+    const entries: Array<{ file: File; relativePath: string }> = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const rel = (f as { webkitRelativePath?: string }).webkitRelativePath || f.name;
+      entries.push({ file: f, relativePath: rel });
+    }
+    processIncomingItems(entries, fromFolder);
   };
 
   // Analisis file ZIP di peramban secara lokal
@@ -128,11 +225,16 @@ export const UploadCenterView: React.FC = () => {
     setSelectedZipFile(file);
     setIsAnalyzingZip(true);
     setZipAnalysis(null);
+    setUploadFeedback(null);
 
     try {
       const result = await analyzeZipArchive(file);
       setZipAnalysis(result);
       if (!result.isValid) {
+        setUploadFeedback({
+          type: 'error',
+          message: result.error || 'Arsip ZIP tidak valid atau rusak.',
+        });
         notify('error', result.error || 'Arsip ZIP tidak valid atau rusak.', 'Analisis Gagal');
       } else {
         notify(
@@ -143,7 +245,9 @@ export const UploadCenterView: React.FC = () => {
         setCommitMessage(`Ekstrak dan terapkan arsip ${file.name}`);
       }
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal memproses file ZIP', 'Error');
+      const msg = err instanceof Error ? err.message : 'Gagal memproses file ZIP';
+      setUploadFeedback({ type: 'error', message: msg });
+      notify('error', msg, 'Error');
     } finally {
       setIsAnalyzingZip(false);
     }
@@ -167,11 +271,19 @@ export const UploadCenterView: React.FC = () => {
     });
   };
 
-  // Drag and drop handler
-  const handleDrop = (e: React.DragEvent) => {
+  // Drag and drop handler (mendukung file, ZIP, maupun folder penuh)
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      addFilesToQueue(e.dataTransfer.files);
+    try {
+      const droppedEntries = await readDroppedEntries(e.dataTransfer);
+      if (droppedEntries.length > 0) {
+        const hasDirectoryPaths = droppedEntries.some((d) => d.relativePath.includes('/'));
+        processIncomingItems(droppedEntries, hasDirectoryPaths);
+      }
+    } catch {
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        addFilesToQueue(e.dataTransfer.files, false);
+      }
     }
   };
 
@@ -209,42 +321,119 @@ export const UploadCenterView: React.FC = () => {
       await refreshRepos();
       await selectRepo(created);
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal membuat repositori', 'Error');
+      const msg = err instanceof Error ? err.message : 'Gagal membuat repositori';
+      setUploadFeedback({ type: 'error', message: msg });
+      notify('error', msg, 'Error');
     } finally {
       setIsCreatingRepo(false);
     }
   };
 
+  // Helper komitmen batch yang aman untuk repositori kosong maupun sudah berisi
+  const commitFilesToRepo = async (
+    entries: Array<{ path: string; base64Content: string }>,
+    message: string
+  ) => {
+    if (!token || !activeRepo || entries.length === 0) return;
+
+    const owner = activeRepo.owner.login;
+    const repoName = activeRepo.name;
+    const targetBranch = activeBranch || activeRepo.default_branch || 'main';
+    let remainingEntries = [...entries];
+
+    // Jika repositori masih benar-benar kosong (belum punya branch/commit sama sekali),
+    // inisialisasi dengan berkas pertama melalui Contents API lalu tunggu ref terbaca
+    if (branches.length === 0) {
+      const first = remainingEntries.shift()!;
+      await saveFile(token, owner, repoName, first.path, first.base64Content, message, targetBranch);
+      if (remainingEntries.length === 0) {
+        setProgressPercent(100);
+        return;
+      }
+      for (let attempt = 0; attempt < 8; attempt++) {
+        try {
+          await getBranchRefSha(token, owner, repoName, targetBranch);
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      }
+    }
+
+    const blobResults: Array<{
+      path: string;
+      mode: '100644' | '100755';
+      type: 'blob';
+      sha: string;
+    }> = [];
+
+    const total = remainingEntries.length;
+    let completedCount = 0;
+
+    for (let idx = 0; idx < remainingEntries.length; idx++) {
+      const entry = remainingEntries[idx];
+      try {
+        const blob = await createGitBlob(token, owner, repoName, entry.base64Content, 'base64');
+        blobResults.push({
+          path: entry.path,
+          sha: blob.sha,
+          mode: '100644',
+          type: 'blob',
+        });
+      } catch (err: unknown) {
+        // Fallback jika ternyata repositori kosong walaupun branches sempat terbaca
+        if (idx === 0 && err instanceof Error && err.message.toLowerCase().includes('empty')) {
+          await saveFile(token, owner, repoName, entry.path, entry.base64Content, message, targetBranch);
+          if (remainingEntries.length === 1) {
+            setProgressPercent(100);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 800));
+          completedCount++;
+          continue;
+        }
+        throw err;
+      }
+
+      completedCount++;
+      setProgressPercent(Math.round(5 + (completedCount / total) * 75));
+    }
+
+    if (blobResults.length > 0) {
+      setProgressPercent(85);
+      await createBatchCommit(token, owner, repoName, targetBranch, blobResults, message);
+    }
+    setProgressPercent(100);
+  };
+
   // Eksekusi Unggah Berkas Biasa / Folder
   const handleExecuteUpload = async () => {
     if (!token || !activeRepo) {
-      notify('error', 'Silakan pilih atau buat repositori tujuan terlebih dahulu.', 'Repositori Diperlukan');
+      setUploadFeedback({
+        type: 'error',
+        message: 'Silakan pilih atau buat repositori tujuan terlebih dahulu.',
+      });
       return;
     }
     if (queue.length === 0) {
-      notify('warning', 'Antrean berkas masih kosong.', 'Peringatan');
+      setUploadFeedback({ type: 'error', message: 'Antrean berkas masih kosong.' });
       return;
     }
 
     setIsProcessing(true);
     setProgressPercent(5);
+    setUploadFeedback(null);
 
     try {
-      const blobResults: Array<{
-        path: string;
-        mode: '100644' | '100755';
-        type: 'blob';
-        sha: string;
-      }> = [];
-      const total = queue.length;
-      let completedCount = 0;
+      const cleanDest = destPath ? destPath.replace(/^\/+|\/+$/g, '') : '';
+      const preparedEntries: Array<{ path: string; base64Content: string }> = [];
 
       for (const item of queue) {
         if (!item.file) continue;
         const fileObj = item.file;
 
-        const reader = new FileReader();
         const base64Content = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
           reader.onload = () => {
             const res = reader.result as string;
             const b64 = res.includes(',') ? res.split(',')[1] : res;
@@ -254,56 +443,36 @@ export const UploadCenterView: React.FC = () => {
           reader.readAsDataURL(fileObj);
         });
 
-        const blob = await createGitBlob(
-          token,
-          activeRepo.owner.login,
-          activeRepo.name,
-          base64Content,
-          'base64'
-        );
+        const cleanRel = item.relativePath.replace(/^\/+/, '');
+        const finalPath = cleanDest ? `${cleanDest}/${cleanRel}` : cleanRel;
 
-        let finalPath = item.relativePath;
-        if (destPath && destPath.trim() !== '') {
-          const cleanDest = destPath.replace(/^\/+|\/+$/g, '');
-          finalPath = `${cleanDest}/${item.relativePath}`;
-        }
-
-        blobResults.push({
+        preparedEntries.push({
           path: finalPath,
-          sha: blob.sha,
-          mode: '100644',
-          type: 'blob',
+          base64Content,
         });
-
-        completedCount++;
-        setProgressPercent(Math.round(5 + (completedCount / total) * 75));
       }
 
-      setProgressPercent(85);
+      await commitFilesToRepo(preparedEntries, commitMessage || 'Unggah berkas melalui FAHGIT');
 
-      await createBatchCommit(
-        token,
-        activeRepo.owner.login,
-        activeRepo.name,
-        activeBranch,
-        blobResults,
-        commitMessage || 'Unggah berkas melalui FAHGIT'
-      );
-
-      setProgressPercent(100);
+      setUploadFeedback({
+        type: 'success',
+        message: `Berhasil mengunggah ${preparedEntries.length} berkas ke ${activeRepo.name} (${activeBranch || 'main'})!`,
+      });
       notify(
         'success',
-        `Berhasil mengunggah ${blobResults.length} berkas ke cabang ${activeBranch}!`,
+        `Berhasil mengunggah ${preparedEntries.length} berkas ke cabang ${activeBranch}!`,
         'Unggah Sukses'
       );
 
-      await refreshTree();
+      await selectRepo(activeRepo);
       setTimeout(() => {
         clearQueue();
         setIsProcessing(false);
-      }, 1200);
+      }, 900);
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal mengunggah berkas', 'Gagal Unggah');
+      const msg = err instanceof Error ? err.message : 'Gagal mengunggah berkas';
+      setUploadFeedback({ type: 'error', message: msg });
+      notify('error', msg, 'Gagal Unggah');
       setIsProcessing(false);
     }
   };
@@ -311,88 +480,68 @@ export const UploadCenterView: React.FC = () => {
   // Eksekusi Ekstraksi Berkas ZIP Langsung ke Repositori
   const handleExecuteZipExtract = async () => {
     if (!token || !activeRepo || !zipAnalysis) {
-      notify('error', 'Silakan pilih repositori tujuan dan arsip ZIP yang valid.', 'Data Kurang');
+      setUploadFeedback({
+        type: 'error',
+        message: 'Silakan pilih repositori tujuan dan arsip ZIP yang valid.',
+      });
       return;
     }
 
-    const selectedItems = zipAnalysis.items.filter((i) => i.selected);
+    const selectedItems = zipAnalysis.items.filter((i) => !i.isDirectory && i.selected && i.data);
     if (selectedItems.length === 0) {
-      notify('warning', 'Pilih setidaknya satu file dari dalam ZIP untuk diekstrak.', 'Peringatan');
+      setUploadFeedback({
+        type: 'error',
+        message: 'Pilih setidaknya satu berkas dari dalam ZIP untuk diekstrak.',
+      });
       return;
     }
 
     setIsProcessing(true);
     setProgressPercent(5);
+    setUploadFeedback(null);
 
     try {
-      const blobResults: Array<{
-        path: string;
-        mode: '100644' | '100755';
-        type: 'blob';
-        sha: string;
-      }> = [];
-      const total = selectedItems.length;
-      let count = 0;
-
-      for (const item of selectedItems) {
-        if (!item.data) continue;
-
-        const base64Data = uint8ArrayToBase64(item.data);
-        const blob = await createGitBlob(
-          token,
-          activeRepo.owner.login,
-          activeRepo.name,
-          base64Data,
-          'base64'
-        );
-
-        let finalPath = item.path;
-        if (destPath && destPath.trim() !== '') {
-          const cleanDest = destPath.replace(/^\/+|\/+$/g, '');
-          finalPath = `${cleanDest}/${item.path}`;
-        }
-
-        blobResults.push({
+      const cleanDest = destPath ? destPath.replace(/^\/+|\/+$/g, '') : '';
+      const preparedEntries = selectedItems.map((item) => {
+        const cleanRel = item.path.replace(/^\/+/, '');
+        const finalPath = cleanDest ? `${cleanDest}/${cleanRel}` : cleanRel;
+        return {
           path: finalPath,
-          sha: blob.sha,
-          mode: '100644',
-          type: 'blob',
-        });
+          base64Content: uint8ArrayToBase64(item.data!),
+        };
+      });
 
-        count++;
-        setProgressPercent(Math.round(5 + (count / total) * 75));
-      }
-
-      setProgressPercent(85);
-
-      await createBatchCommit(
-        token,
-        activeRepo.owner.login,
-        activeRepo.name,
-        activeBranch,
-        blobResults,
+      await commitFilesToRepo(
+        preparedEntries,
         commitMessage || `Ekstrak ${selectedZipFile?.name || 'arsip ZIP'} via FAHGIT`
       );
 
-      setProgressPercent(100);
+      setUploadFeedback({
+        type: 'success',
+        message: `Berhasil mengekstrak & menerapkan ${preparedEntries.length} berkas langsung ke ${activeRepo.name} (${activeBranch || 'main'})!`,
+      });
       notify(
         'success',
-        `Berhasil mengekstrak & menerapkan ${blobResults.length} berkas ke ${activeBranch}!`,
+        `Berhasil mengekstrak & menerapkan ${preparedEntries.length} berkas ke ${activeBranch}!`,
         'Ekstraksi Selesai'
       );
 
-      await refreshTree();
+      await selectRepo(activeRepo);
       setTimeout(() => {
         clearQueue();
         setIsProcessing(false);
-      }, 1200);
+      }, 900);
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal mengekstrak berkas ZIP', 'Gagal Ekstrak');
+      const msg = err instanceof Error ? err.message : 'Gagal mengekstrak berkas ZIP';
+      setUploadFeedback({ type: 'error', message: msg });
+      notify('error', msg, 'Gagal Ekstrak');
       setIsProcessing(false);
     }
   };
 
   const totalQueueSize = queue.reduce((acc, curr) => acc + curr.size, 0);
+  const zipFileItems = zipAnalysis?.items.filter((i) => !i.isDirectory) || [];
+  const selectedZipCount = zipFileItems.filter((i) => i.selected).length;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -418,6 +567,34 @@ export const UploadCenterView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Status Hasil Unggah / Ekstraksi Inline (Tanpa Popup Mengganggu) */}
+      {uploadFeedback && (
+        <div
+          className={`clay-card rounded-2xl p-4 border flex items-center justify-between gap-3 text-xs ${
+            uploadFeedback.type === 'success'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+              : 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+          }`}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            {uploadFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+            )}
+            <span className="font-medium leading-relaxed">{uploadFeedback.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setUploadFeedback(null)}
+            className="p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 shrink-0"
+            aria-label="Tutup pesan status"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* PENGATURAN REPOSITORI TUJUAN LANGSUNG DI SINI                            */}
@@ -574,7 +751,10 @@ export const UploadCenterView: React.FC = () => {
         ref={fileInputRef}
         type="file"
         multiple
-        onChange={(e) => e.target.files && addFilesToQueue(e.target.files)}
+        onChange={(e) => {
+          if (e.target.files) addFilesToQueue(e.target.files, false);
+          e.target.value = '';
+        }}
         className="hidden"
       />
       <input
@@ -583,7 +763,10 @@ export const UploadCenterView: React.FC = () => {
         // @ts-expect-error webkitdirectory is standard for folder picker
         webkitdirectory="true"
         multiple
-        onChange={(e) => e.target.files && addFilesToQueue(e.target.files)}
+        onChange={(e) => {
+          if (e.target.files) addFilesToQueue(e.target.files, true);
+          e.target.value = '';
+        }}
         className="hidden"
       />
 
@@ -598,12 +781,20 @@ export const UploadCenterView: React.FC = () => {
       >
         <UploadCloud className="w-8 h-8 text-cyan-500 dark:text-cyan-400 mx-auto mb-2 animate-bounce" />
         <p className="text-xs font-bold text-slate-900 dark:text-white">
-          Atau seret dan lepas (Drag & Drop) berkas atau file .ZIP langsung ke sini
+          Atau seret dan lepas (Drag & Drop) berkas, folder, atau file .ZIP langsung ke sini
         </p>
         <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
-          Mendukung semua jenis berkas, kode sumber, gambar, dan arsip terkompresi.
+          Folder pembungkus luar dari ZIP/Folder akan otomatis dilewati sehingga isi di dalamnya langsung masuk ke repositori.
         </p>
       </div>
+
+      {/* Loading Indicator Saat Analisis ZIP */}
+      {isAnalyzingZip && (
+        <div className="clay-card rounded-3xl p-5 border border-purple-500/30 flex items-center gap-3 text-xs text-slate-700 dark:text-slate-300">
+          <Loader2 className="w-4 h-4 animate-spin text-purple-500 shrink-0" />
+          <span>Menganalisis isi arsip ZIP secara lokal...</span>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* JIKA FILE ZIP TERDETEKSI: KOTAK EKSTRAKSI & PRATINJAU                    */}
@@ -616,12 +807,12 @@ export const UploadCenterView: React.FC = () => {
                 <FileArchive className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate max-w-xs">
                     {selectedZipFile.name}
                   </h3>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30 font-semibold">
-                    ZIP Teranalisis
+                    Ekstrak Langsung ke Repo
                   </span>
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
@@ -634,13 +825,13 @@ export const UploadCenterView: React.FC = () => {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => toggleSelectAllZip(true)}
-                className="text-xs text-cyan-400 hover:underline px-2 py-1"
+                className="text-xs text-cyan-500 dark:text-cyan-400 hover:underline px-2 py-1"
               >
                 Pilih Semua
               </button>
               <button
                 onClick={() => toggleSelectAllZip(false)}
-                className="text-xs text-slate-400 hover:underline px-2 py-1"
+                className="text-xs text-slate-500 dark:text-slate-400 hover:underline px-2 py-1"
               >
                 Batalkan Semua
               </button>
@@ -649,7 +840,7 @@ export const UploadCenterView: React.FC = () => {
 
           {/* Daftar berkas di dalam ZIP */}
           <div className="max-h-48 overflow-y-auto space-y-1 pr-1 text-xs">
-            {zipAnalysis.items.map((item) => (
+            {zipFileItems.map((item) => (
               <div
                 key={item.path}
                 onClick={() => toggleZipItem(item.path)}
@@ -675,16 +866,32 @@ export const UploadCenterView: React.FC = () => {
             ))}
           </div>
 
+          {/* Progress Bar Ekstraksi ZIP */}
+          {isProcessing && (
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-[11px] text-slate-700 dark:text-slate-300 font-mono">
+                <span>Mengekstrak & mengunggah berkas ke GitHub...</span>
+                <span className="font-bold text-purple-600 dark:text-purple-400">{progressPercent}%</span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-purple-500 via-pink-500 to-rose-500 rounded-full transition-all duration-300"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Tombol Ekstrak ZIP ke Repositori */}
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
             <span className="text-xs text-slate-600 dark:text-slate-400">
-              {zipAnalysis.items.filter((i) => i.selected).length} dari {zipAnalysis.totalFiles}{' '}
-              berkas dipilih untuk diekstrak.
+              {selectedZipCount} dari {zipAnalysis.totalFiles}{' '}
+              berkas dipilih untuk diekstrak langsung.
             </span>
 
             <button
               onClick={handleExecuteZipExtract}
-              disabled={isProcessing || !activeRepo}
+              disabled={isProcessing || !activeRepo || selectedZipCount === 0}
               className="w-full sm:w-auto px-6 py-2.5 rounded-full bg-gradient-to-r from-purple-500 via-pink-500 to-rose-500 text-white font-bold text-xs clay-button-rgb shadow-lg hover:scale-105 active:scale-95 transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {isProcessing ? (

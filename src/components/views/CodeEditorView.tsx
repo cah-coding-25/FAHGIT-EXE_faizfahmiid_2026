@@ -41,6 +41,7 @@ export const CodeEditorView: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const activeTab = editorTabs.find((t) => t.id === activeTabId);
 
@@ -71,10 +72,14 @@ export const CodeEditorView: React.FC = () => {
 
   const handleDiscardChanges = () => {
     if (!activeTab) return;
-    if (window.confirm(`Batalkan perubahan yang belum disimpan pada ${activeTab.name}?`)) {
-      updateTabContent(activeTab.id, activeTab.originalContent);
-      notify('info', `Perubahan pada ${activeTab.name} telah dibatalkan`, 'Dibatalkan');
+    if (!confirmDiscard) {
+      setConfirmDiscard(true);
+      setTimeout(() => setConfirmDiscard(false), 4000);
+      return;
     }
+    updateTabContent(activeTab.id, activeTab.originalContent);
+    setConfirmDiscard(false);
+    notify('info', `Perubahan pada ${activeTab.name} telah dibatalkan`, 'Dibatalkan');
   };
 
   const formatJson = () => {
@@ -181,10 +186,15 @@ export const CodeEditorView: React.FC = () => {
           {activeTab.isDirty && (
             <button
               onClick={handleDiscardChanges}
-              className="p-1.5 text-slate-400 hover:text-amber-400 rounded-full hover:bg-slate-800 text-xs flex items-center gap-1"
+              className={`px-2 py-1 rounded-full text-xs flex items-center gap-1 transition-colors ${
+                confirmDiscard
+                  ? 'bg-rose-500/20 text-rose-400 font-bold'
+                  : 'text-slate-400 hover:text-amber-400 hover:bg-slate-800'
+              }`}
               title="Batalkan Perubahan"
             >
               <RotateCcw className="w-3.5 h-3.5" />
+              {confirmDiscard && <span className="text-[11px]">Konfirmasi?</span>}
             </button>
           )}
 

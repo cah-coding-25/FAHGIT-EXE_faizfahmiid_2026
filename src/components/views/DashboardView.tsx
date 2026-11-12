@@ -111,7 +111,9 @@ export const DashboardView: React.FC = () => {
                 REPOSITORI UTAMA
               </span>
               <span className="font-mono text-[11px] tabular-nums font-bold text-slate-800 dark:text-white bg-slate-100 dark:bg-[#0F172A] px-2.5 py-0.5 rounded-full border border-slate-200 dark:border-white/10">
-                {repos.length > 0 ? `0${activeRepoIndex + 1} / 0${repos.length}` : '00 / 00'}
+                {repos.length > 0
+                  ? `${String(activeRepoIndex + 1).padStart(2, '0')} / ${String(repos.length).padStart(2, '0')}`
+                  : '00 / 00'}
               </span>
             </div>
 
