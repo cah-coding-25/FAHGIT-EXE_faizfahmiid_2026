@@ -20,18 +20,46 @@ export interface ZipAnalysis {
 }
 
 /**
+ * Sanitize a repository relative path for GitHub Git Trees API.
+ * Strips redundant slashes/leading dots and rejects '.', '..', '.git', null bytes, and OS junk.
+ */
+export function sanitizeGitRepoPath(rawPath: string): string | null {
+  const clean = rawPath.replace(/\\/g, '/').trim();
+  if (!clean) return null;
+
+  const rawParts = clean.split('/');
+  const safeParts: string[] = [];
+
+  for (const rawPart of rawParts) {
+    const part = rawPart.trim();
+    if (!part || part === '.') {
+      continue;
+    }
+    if (part === '..' || part.includes(':') || part.includes('\0')) {
+      return null;
+    }
+    const lower = part.toLowerCase();
+    if (
+      lower === '.git' ||
+      lower === '__macosx' ||
+      lower === '.ds_store' ||
+      lower === 'thumbs.db' ||
+      lower === 'desktop.ini'
+    ) {
+      return null;
+    }
+    safeParts.push(part);
+  }
+
+  if (safeParts.length === 0) return null;
+  return safeParts.join('/');
+}
+
+/**
  * Sanitize relative file path from zip archive to prevent directory traversal
  */
 export function sanitizeZipPath(rawPath: string): string | null {
-  // Replace Windows backslashes
-  let clean = rawPath.replace(/\\/g, '/');
-
-  // Strip leading slashes
-  while (clean.startsWith('/')) {
-    clean = clean.substring(1);
-  }
-
-  // Prevent directory traversal attacks
+  const clean = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
   const parts = clean.split('/');
   const safeParts: string[] = [];
 
@@ -39,7 +67,6 @@ export function sanitizeZipPath(rawPath: string): string | null {
     if (part === '..' || part === '.') {
       return null; // Reject path with traversal
     }
-    // Reject Windows drive letter or dangerous chars
     if (part.includes(':') || part.includes('\0')) {
       return null;
     }
@@ -92,8 +119,20 @@ export async function analyzeZipArchive(file: File): Promise<ZipAnalysis> {
         };
       }
 
-      // Ignore macOS junk files like __MACOSX and .DS_Store
-      if (safePath.startsWith('__MACOSX/') || safePath.endsWith('.DS_Store')) {
+      // Ignore macOS/Windows junk and internal .git repository metadata (forbidden by GitHub Git Trees API)
+      const pathSegments = safePath.split('/');
+      if (
+        pathSegments.some((seg) => {
+          const lower = seg.toLowerCase();
+          return (
+            lower === '.git' ||
+            lower === '__macosx' ||
+            lower === '.ds_store' ||
+            lower === 'thumbs.db' ||
+            lower === 'desktop.ini'
+          );
+        })
+      ) {
         continue;
       }
 

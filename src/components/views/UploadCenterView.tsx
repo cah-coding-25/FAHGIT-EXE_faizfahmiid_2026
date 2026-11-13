@@ -14,7 +14,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { createGitBlob, createBatchCommit, createRepo, saveFile, getBranchRefSha } from '../../services/github';
-import { analyzeZipArchive, ZipAnalysis } from '../../services/zip';
+import { analyzeZipArchive, ZipAnalysis, sanitizeGitRepoPath } from '../../services/zip';
 import { uint8ArrayToBase64, formatFileSize } from '../../utils/fileUtils';
 import { FileIcon } from '../common/FileIcon';
 import {
@@ -50,18 +50,32 @@ interface QueuedFile {
 }
 
 // Hapus folder pembungkus utama tunggal agar berkas di dalamnya langsung masuk ke repositori
+// Termasuk kasus hasil "Extract All" Windows yang sering membungkus 2 lapis (misal: nama-main/nama-main/...)
 function stripCommonOuterFolder(paths: string[]): string[] {
   if (paths.length === 0) return paths;
   if (!paths.every((p) => p.includes('/'))) return paths;
 
   const firstSeg = paths[0].split('/')[0];
-  if (!firstSeg) return paths;
+  if (!firstSeg || !paths.every((p) => p.split('/')[0] === firstSeg)) {
+    return paths;
+  }
 
-  const allSameOuter = paths.every((p) => p.split('/')[0] === firstSeg);
-  if (!allSameOuter) return paths;
+  const prefix1 = `${firstSeg}/`;
+  const afterFirst = paths.map((p) => p.slice(prefix1.length)).filter(Boolean);
 
-  const prefix = `${firstSeg}/`;
-  return paths.map((p) => p.slice(prefix.length));
+  if (afterFirst.length > 0 && afterFirst.every((p) => p.includes('/'))) {
+    const secondSeg = afterFirst[0].split('/')[0];
+    if (
+      secondSeg &&
+      afterFirst.every((p) => p.split('/')[0] === secondSeg) &&
+      (secondSeg === firstSeg || /-(main|master)$/i.test(secondSeg))
+    ) {
+      const prefix2 = `${secondSeg}/`;
+      return afterFirst.map((p) => p.slice(prefix2.length)).filter(Boolean);
+    }
+  }
+
+  return afterFirst;
 }
 
 // Baca rekursif seluruh entri folder dari Drag & Drop
@@ -138,7 +152,7 @@ export const UploadCenterView: React.FC = () => {
   // Antrean File
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [destPath, setDestPath] = useState(currentPath || '');
-  const [commitMessage, setCommitMessage] = useState('Unggah berkas melalui FAHGIT');
+  const [commitMessage, setCommitMessage] = useState('Unggah berkas melalui Fahgit');
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
   const [uploadFeedback, setUploadFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -158,42 +172,34 @@ export const UploadCenterView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  // Tambahkan daftar berkas (dengan penghapusan otomatis folder pembungkus luar jika dari folder)
+  // Tambahkan daftar berkas (dengan sanitasi path & penghapusan otomatis folder pembungkus luar seperti ZIP)
   const processIncomingItems = (entries: Array<{ file: File; relativePath: string }>, fromFolder: boolean) => {
     setUploadFeedback(null);
 
-    const filtered = entries.filter(({ file, relativePath }) => {
-      if (relativePath.includes('__MACOSX/') || relativePath.endsWith('.DS_Store')) return false;
-      if (
-        file.name.startsWith('.') &&
-        file.name !== '.gitkeep' &&
-        file.name !== '.gitignore' &&
-        file.name !== '.env'
-      ) {
-        return false;
+    const sanitizedEntries: Array<{ file: File; safePath: string }> = [];
+    for (const { file, relativePath } of entries) {
+      // Jika file .ZIP dipilih langsung (bukan bagian dari folder)
+      if (!fromFolder && !relativePath.includes('/') && file.name.toLowerCase().endsWith('.zip')) {
+        handleZipFileSelect(file);
+        continue;
       }
-      return true;
-    });
 
-    if (filtered.length === 0) return;
+      const safePath = sanitizeGitRepoPath(relativePath);
+      if (!safePath) continue; // otomatis buang .git/*, __MACOSX/*, .DS_Store, Thumbs.db, path tidak valid
+      sanitizedEntries.push({ file, safePath });
+    }
 
-    // Jika berasal dari folder picker atau drag-drop folder, hapus folder pembungkus utama
-    const rawPaths = filtered.map((e) => e.relativePath.replace(/\\/g, '/').replace(/^\/+/, ''));
-    const normalizedPaths = fromFolder || rawPaths.every((p) => p.includes('/'))
-      ? stripCommonOuterFolder(rawPaths)
-      : rawPaths;
+    if (sanitizedEntries.length === 0) return;
+
+    const rawPaths = sanitizedEntries.map((e) => e.safePath);
+    const shouldStripOuter = fromFolder || rawPaths.every((p) => p.includes('/'));
+    const normalizedPaths = shouldStripOuter ? stripCommonOuterFolder(rawPaths) : rawPaths;
 
     const newItems: QueuedFile[] = [];
 
-    filtered.forEach(({ file }, i) => {
-      const cleanRel = normalizedPaths[i];
+    sanitizedEntries.forEach(({ file }, i) => {
+      const cleanRel = sanitizeGitRepoPath(normalizedPaths[i] || '');
       if (!cleanRel) return;
-
-      // Jika berkas adalah arsip .ZIP (dan bukan dari dalam folder), analisis otomatis untuk ekstraksi
-      if (!fromFolder && file.name.toLowerCase().endsWith('.zip')) {
-        handleZipFileSelect(file);
-        return;
-      }
 
       newItems.push({
         id: `q_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
@@ -205,7 +211,16 @@ export const UploadCenterView: React.FC = () => {
     });
 
     if (newItems.length > 0) {
-      setQueue((prev) => [...prev, ...newItems]);
+      setQueue((prev) => {
+        const byPath = new Map<string, QueuedFile>();
+        for (const existing of prev) {
+          byPath.set(existing.relativePath, existing);
+        }
+        for (const incoming of newItems) {
+          byPath.set(incoming.relativePath, incoming);
+        }
+        return Array.from(byPath.values());
+      });
     }
   };
 
@@ -339,23 +354,42 @@ export const UploadCenterView: React.FC = () => {
     const owner = activeRepo.owner.login;
     const repoName = activeRepo.name;
     const targetBranch = activeBranch || activeRepo.default_branch || 'main';
-    let remainingEntries = [...entries];
 
-    // Jika repositori masih benar-benar kosong (belum punya branch/commit sama sekali),
-    // inisialisasi dengan berkas pertama melalui Contents API lalu tunggu ref terbaca
-    if (branches.length === 0) {
+    // Sanitasi akhir & deduplikasi seluruh path agar bebas dari komponen path terlarang GitHub
+    const dedupedMap = new Map<string, { path: string; base64Content: string }>();
+    for (const item of entries) {
+      const validPath = sanitizeGitRepoPath(item.path);
+      if (!validPath) continue;
+      dedupedMap.set(validPath, { path: validPath, base64Content: item.base64Content });
+    }
+
+    let remainingEntries = Array.from(dedupedMap.values());
+    if (remainingEntries.length === 0) {
+      throw new Error('Tidak ada berkas dengan path yang valid untuk diunggah.');
+    }
+
+    // Cek langsung apakah branch sudah memiliki commit HEAD; jika belum (repo kosong), inisialisasi dulu
+    let branchExists = false;
+    try {
+      await getBranchRefSha(token, owner, repoName, targetBranch);
+      branchExists = true;
+    } catch {
+      branchExists = false;
+    }
+
+    if (!branchExists) {
       const first = remainingEntries.shift()!;
       await saveFile(token, owner, repoName, first.path, first.base64Content, message, targetBranch);
       if (remainingEntries.length === 0) {
         setProgressPercent(100);
         return;
       }
-      for (let attempt = 0; attempt < 8; attempt++) {
+      for (let attempt = 0; attempt < 10; attempt++) {
         try {
           await getBranchRefSha(token, owner, repoName, targetBranch);
           break;
         } catch {
-          await new Promise((r) => setTimeout(r, 600));
+          await new Promise((r) => setTimeout(r, 500));
         }
       }
     }
@@ -369,38 +403,37 @@ export const UploadCenterView: React.FC = () => {
 
     const total = remainingEntries.length;
     let completedCount = 0;
+    const CONCURRENCY = 4;
 
-    for (let idx = 0; idx < remainingEntries.length; idx++) {
-      const entry = remainingEntries[idx];
-      try {
-        const blob = await createGitBlob(token, owner, repoName, entry.base64Content, 'base64');
-        blobResults.push({
-          path: entry.path,
-          sha: blob.sha,
-          mode: '100644',
-          type: 'blob',
-        });
-      } catch (err: unknown) {
-        // Fallback jika ternyata repositori kosong walaupun branches sempat terbaca
-        if (idx === 0 && err instanceof Error && err.message.toLowerCase().includes('empty')) {
-          await saveFile(token, owner, repoName, entry.path, entry.base64Content, message, targetBranch);
-          if (remainingEntries.length === 1) {
-            setProgressPercent(100);
-            return;
-          }
-          await new Promise((r) => setTimeout(r, 800));
-          completedCount++;
-          continue;
+    const uploadWithRetry = async (entry: { path: string; base64Content: string }) => {
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const blob = await createGitBlob(token, owner, repoName, entry.base64Content, 'base64');
+          return {
+            path: entry.path,
+            sha: blob.sha,
+            mode: '100644' as const,
+            type: 'blob' as const,
+          };
+        } catch (err) {
+          lastErr = err;
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
         }
-        throw err;
       }
+      throw lastErr;
+    };
 
-      completedCount++;
-      setProgressPercent(Math.round(5 + (completedCount / total) * 75));
+    for (let i = 0; i < remainingEntries.length; i += CONCURRENCY) {
+      const batch = remainingEntries.slice(i, i + CONCURRENCY);
+      const uploaded = await Promise.all(batch.map((entry) => uploadWithRetry(entry)));
+      blobResults.push(...uploaded);
+      completedCount += uploaded.length;
+      setProgressPercent(Math.round(5 + (completedCount / total) * 78));
     }
 
     if (blobResults.length > 0) {
-      setProgressPercent(85);
+      setProgressPercent(88);
       await createBatchCommit(token, owner, repoName, targetBranch, blobResults, message);
     }
     setProgressPercent(100);
@@ -420,17 +453,29 @@ export const UploadCenterView: React.FC = () => {
       return;
     }
 
+    const rawDest = destPath.trim();
+    const cleanDest = rawDest ? sanitizeGitRepoPath(rawDest) : '';
+    if (rawDest && cleanDest === null) {
+      setUploadFeedback({
+        type: 'error',
+        message: 'Format Folder Tujuan tidak valid. Hindari penggunaan ".." atau ".git".',
+      });
+      return;
+    }
+
     setIsProcessing(true);
     setProgressPercent(5);
     setUploadFeedback(null);
 
     try {
-      const cleanDest = destPath ? destPath.replace(/^\/+|\/+$/g, '') : '';
       const preparedEntries: Array<{ path: string; base64Content: string }> = [];
 
       for (const item of queue) {
         if (!item.file) continue;
         const fileObj = item.file;
+
+        const cleanRel = sanitizeGitRepoPath(item.relativePath);
+        if (!cleanRel) continue;
 
         const base64Content = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -443,7 +488,6 @@ export const UploadCenterView: React.FC = () => {
           reader.readAsDataURL(fileObj);
         });
 
-        const cleanRel = item.relativePath.replace(/^\/+/, '');
         const finalPath = cleanDest ? `${cleanDest}/${cleanRel}` : cleanRel;
 
         preparedEntries.push({
@@ -452,7 +496,7 @@ export const UploadCenterView: React.FC = () => {
         });
       }
 
-      await commitFilesToRepo(preparedEntries, commitMessage || 'Unggah berkas melalui FAHGIT');
+      await commitFilesToRepo(preparedEntries, commitMessage || 'Unggah berkas melalui Fahgit');
 
       setUploadFeedback({
         type: 'success',
@@ -496,24 +540,36 @@ export const UploadCenterView: React.FC = () => {
       return;
     }
 
+    const rawDest = destPath.trim();
+    const cleanDest = rawDest ? sanitizeGitRepoPath(rawDest) : '';
+    if (rawDest && cleanDest === null) {
+      setUploadFeedback({
+        type: 'error',
+        message: 'Format Folder Tujuan tidak valid. Hindari penggunaan ".." atau ".git".',
+      });
+      return;
+    }
+
     setIsProcessing(true);
     setProgressPercent(5);
     setUploadFeedback(null);
 
     try {
-      const cleanDest = destPath ? destPath.replace(/^\/+|\/+$/g, '') : '';
-      const preparedEntries = selectedItems.map((item) => {
-        const cleanRel = item.path.replace(/^\/+/, '');
-        const finalPath = cleanDest ? `${cleanDest}/${cleanRel}` : cleanRel;
-        return {
-          path: finalPath,
-          base64Content: uint8ArrayToBase64(item.data!),
-        };
-      });
+      const preparedEntries = selectedItems
+        .map((item) => {
+          const cleanRel = sanitizeGitRepoPath(item.path);
+          if (!cleanRel) return null;
+          const finalPath = cleanDest ? `${cleanDest}/${cleanRel}` : cleanRel;
+          return {
+            path: finalPath,
+            base64Content: uint8ArrayToBase64(item.data!),
+          };
+        })
+        .filter((e): e is { path: string; base64Content: string } => e !== null);
 
       await commitFilesToRepo(
         preparedEntries,
-        commitMessage || `Ekstrak ${selectedZipFile?.name || 'arsip ZIP'} via FAHGIT`
+        commitMessage || `Ekstrak ${selectedZipFile?.name || 'arsip ZIP'} via Fahgit`
       );
 
       setUploadFeedback({
@@ -961,7 +1017,7 @@ export const UploadCenterView: React.FC = () => {
           {/* Commit Message & Action Button */}
           <div className="pt-2 space-y-3">
             <div>
-              <label className="block text-[11px] font-bold text-slate-300 mb-1">
+              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Pesan Commit GitHub:
               </label>
               <div className="relative">
