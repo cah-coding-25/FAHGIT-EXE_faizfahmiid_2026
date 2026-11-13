@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: fahgit-release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-release:
     name: Build Windows Application & GitHub Release
@@ -61,7 +65,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release"
-          Get-ChildItem -Path "release" -Include "*.exe", "*.zip", "latest.yml" -Recurse | ForEach-Object {
+          if (Test-Path "release/checksums-sha256.txt") {
+            Remove-Item -Force "release/checksums-sha256.txt"
+          }
+          Get-ChildItem -Path "release\*" -File -Include "*.exe", "*.zip", "latest.yml" | ForEach-Object {
             $hash = Get-FileHash -Path $_.FullName -Algorithm SHA256
             "$($hash.Hash)  $($_.Name)" | Out-File -FilePath "release/checksums-sha256.txt" -Append -Encoding ascii
           }
@@ -74,7 +81,7 @@ jobs:
         id: release_tag
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.release_tag }}"
+          $tag = "${{ github.event.inputs.release_tag }}".Trim()
           if (-not $tag -and $env:GITHUB_REF -like "refs/tags/*") {
             $tag = $env:GITHUB_REF.Substring(10)
           }
@@ -85,7 +92,66 @@ jobs:
           Write-Host "Using Release Tag: $tag"
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: 10. Publish GitHub Release with Artifacts
+      - name: 10. Clean Conflicting / Legacy Release Assets
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = $env:RELEASE_TAG
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $release = $null
+          try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers $headers -Method Get
+          } catch {
+            try {
+              $allReleases = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=30" -Headers $headers -Method Get
+              $release = $allReleases | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
+            } catch {
+              $release = $null
+            }
+          }
+
+          if ($null -eq $release -or $null -eq $release.assets -or $release.assets.Count -eq 0) {
+            Write-Host "Tidak ada aset lama yang konflik untuk tag '$tag'."
+            exit 0
+          }
+
+          $localFiles = @()
+          if (Test-Path "release") {
+            $localFiles = Get-ChildItem -Path "release\*" -File -Include "*.exe", "*.zip", "latest.yml", "checksums-sha256.txt" | ForEach-Object { $_.Name.ToLowerInvariant() }
+          }
+
+          $deletedCount = 0
+          foreach ($asset in $release.assets) {
+            $assetNameLower = $asset.name.ToLowerInvariant()
+            $isDuplicateCaseInsensitive = $localFiles -contains $assetNameLower
+            $isStarterOrCorrupt = $asset.state -ne "uploaded"
+            $isLegacyAsset = $assetNameLower -like "fahgit-*.exe" -or $assetNameLower -like "fahgit-*.zip"
+
+            if ($isDuplicateCaseInsensitive -or $isStarterOrCorrupt -or $isLegacyAsset) {
+              Write-Host "Menghapus aset rilis lama/konflik: $($asset.name) (id=$($asset.id), state=$($asset.state))"
+              try {
+                Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/assets/$($asset.id)" -Headers $headers -Method Delete | Out-Null
+                $deletedCount++
+              } catch {
+                Write-Warning "Gagal menghapus aset $($asset.name): $_"
+              }
+            }
+          }
+
+          if ($deletedCount -gt 0) {
+            Write-Host "Menunggu sinkronisasi GitHub Release setelah menghapus $deletedCount aset..."
+            Start-Sleep -Seconds 2
+          }
+
+      - name: 11. Publish GitHub Release with Artifacts
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
@@ -111,6 +177,7 @@ jobs:
             release/*.zip
             release/latest.yml
             release/checksums-sha256.txt
+          overwrite_files: true
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
