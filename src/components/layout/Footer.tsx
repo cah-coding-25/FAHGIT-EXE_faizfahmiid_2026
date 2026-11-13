@@ -14,7 +14,7 @@ export const Footer: React.FC = () => {
   return (
     <footer className="border-t border-slate-800/40 dark:border-white/10 bg-transparent px-4 sm:px-8 py-4 text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0 max-w-6xl w-full mx-auto">
       <div className="flex items-center gap-2">
-        <span className="font-bold text-slate-900 dark:text-white font-mono">FAHGIT</span>
+        <span className="font-bold text-slate-900 dark:text-white font-mono">Fahgit</span>
         <span className="text-slate-400 dark:text-slate-600">·</span>
         <span className="text-slate-600 dark:text-slate-400">by: <strong className="font-semibold text-slate-800 dark:text-slate-200">Faiz_Fahmi_ID</strong></span>
         <span className="hidden md:inline text-slate-400 dark:text-slate-600">·</span>

@@ -84,7 +84,7 @@ export const CapsuleNav: React.FC = () => {
     },
     {
       id: 'about',
-      label: 'Tentang FAHGIT',
+      label: 'Tentang Fahgit',
       icon: HelpCircle,
       gradient: 'from-fuchsia-400 via-purple-500 to-pink-500',
     },
@@ -127,8 +127,8 @@ export const CapsuleNav: React.FC = () => {
           <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-200 dark:border-white/10 text-xs px-1">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-cyan-500 dark:bg-cyan-400 animate-pulse" />
-              <span className="font-extrabold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono">
-                Menu Utama FAHGIT
+              <span className="font-extrabold text-slate-900 dark:text-white tracking-wider text-[11px] font-mono">
+                Menu Utama Fahgit
               </span>
             </div>
             <button
@@ -182,7 +182,7 @@ export const CapsuleNav: React.FC = () => {
               </span>
               <span className="text-[10px] text-cyan-600 dark:text-cyan-300 font-mono flex items-center gap-1 font-semibold">
                 <Sparkles className="w-2.5 h-2.5" />
-                FAHGIT Pro
+                Fahgit Pro
               </span>
             </div>
           </div>

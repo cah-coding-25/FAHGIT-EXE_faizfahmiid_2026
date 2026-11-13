@@ -32,19 +32,16 @@ export const AboutView: React.FC = () => {
         <div className="absolute top-0 right-0 w-80 h-80 bg-gradient-to-bl from-cyan-500/20 via-blue-500/10 to-transparent rounded-full blur-3xl pointer-events-none" />
 
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center gap-5">
-          <div className="w-16 h-16 rounded-2xl overflow-hidden bg-gradient-to-tr from-cyan-400 via-blue-500 to-indigo-600 flex items-center justify-center text-white font-mono font-black text-3xl clay-button-rgb shadow-xl shrink-0">
+          <div className="w-16 h-16 rounded-2xl overflow-hidden flex items-center justify-center shadow-xl shrink-0">
             <img
               src="./icon.png"
-              alt="FAHGIT Logo"
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
+              alt="Fahgit Logo"
+              className="w-full h-full object-contain"
             />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight font-mono">FAHGIT</h1>
+              <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight font-mono">Fahgit</h1>
               <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-400/30 font-mono">
                 PRO PLATFORM
               </span>
@@ -53,13 +50,13 @@ export const AboutView: React.FC = () => {
               Your GitHub. Your Files. Your Control.
             </p>
             <p className="text-xs text-slate-700 dark:text-slate-300 mt-1">
-              Dibuat & Dikembangkan oleh: <strong className="text-slate-900 dark:text-white font-bold">Faiz_Fahmi_ID</strong>
+              Dibuat &amp; Dikembangkan oleh: <strong className="text-slate-900 dark:text-white font-bold">Faiz_Fahmi_ID</strong>
             </p>
           </div>
         </div>
 
         <div className="mt-6 pt-5 border-t border-slate-200 dark:border-white/10 text-xs text-slate-700 dark:text-slate-300 leading-relaxed relative z-10">
-          FAHGIT adalah platform visual manajemen repositori dan file GitHub profesional yang dirancang untuk mempermudah pengelolaan repositori, pengeditan kode dengan Monaco Editor, unggah file/folder bertingkat, dan ekstraksi arsip ZIP secara instan tanpa perlu terminal atau perintah Git manual.
+          Fahgit adalah platform visual manajemen repositori dan file GitHub profesional yang dirancang untuk mempermudah pengelolaan repositori, pengeditan kode dengan Monaco Editor, unggah file/folder bertingkat, dan ekstraksi arsip ZIP secara instan tanpa perlu terminal atau perintah Git manual.
         </div>
       </div>
 
@@ -146,7 +143,7 @@ export const AboutView: React.FC = () => {
           </p>
 
           <p>
-            <strong>FAHGIT</strong> adalah buah dari perjalanan panjang itu. Sebuah persembahan tulus yang membuktikan bahwa siapa pun kamu, dari desa manapun kamu berasal, dan apa pun latar belakangmu—ketika niat baik dipadukan dengan ketekunan tanpa henti, doa yang tak pernah putus, dan rasa cinta pada ilmu pengetahuan, engkau mampu menciptakan teknologi yang presisi, mandiri, dan berdaya guna bagi banyak orang.
+            <strong>Fahgit</strong> adalah buah dari perjalanan panjang itu. Sebuah persembahan tulus yang membuktikan bahwa siapa pun kamu, dari desa manapun kamu berasal, dan apa pun latar belakangmu—ketika niat baik dipadukan dengan ketekunan tanpa henti, doa yang tak pernah putus, dan rasa cinta pada ilmu pengetahuan, engkau mampu menciptakan teknologi yang presisi, mandiri, dan berdaya guna bagi banyak orang.
           </p>
         </div>
 
@@ -157,7 +154,7 @@ export const AboutView: React.FC = () => {
             Didedikasikan untuk Seluruh Pejuang Otodidak & Santri Indonesia
           </span>
           <span className="text-slate-500 dark:text-slate-400">
-            FAHGIT v1.0.0 Claymorphic Pro
+            Fahgit v1.0.0 Claymorphic Pro
           </span>
         </div>
       </div>

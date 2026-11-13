@@ -57,7 +57,7 @@ export const TopHeader: React.FC = () => {
     { id: 'file-manager', label: 'Penjelajah & Editor', icon: Files, color: 'text-amber-500 dark:text-amber-400' },
     { id: 'upload-center', label: 'Pusat Unggah & ZIP', icon: UploadCloud, color: 'text-emerald-500 dark:text-emerald-400' },
     { id: 'settings', label: 'Pengaturan & Cabang', icon: Settings, color: 'text-sky-500 dark:text-sky-400' },
-    { id: 'about', label: 'Tentang FAHGIT', icon: HelpCircle, color: 'text-fuchsia-500 dark:text-fuchsia-400' },
+    { id: 'about', label: 'Tentang Fahgit', icon: HelpCircle, color: 'text-fuchsia-500 dark:text-fuchsia-400' },
   ];
 
   const handleSelectView = (targetView: AppView) => {
@@ -76,7 +76,7 @@ export const TopHeader: React.FC = () => {
   // Label nama menu yang sedang aktif
   const currentViewLabel =
     menuItems.find((m) => m.id === view)?.label ||
-    (view === 'code-editor' ? 'Penjelajah & Editor' : 'FAHGIT Pro');
+    (view === 'code-editor' ? 'Penjelajah & Editor' : 'Fahgit Pro');
 
   return (
     <header className="w-full pt-4 pb-3 px-4 sm:px-8 max-w-6xl mx-auto flex items-center justify-between gap-4 relative z-40">
@@ -85,26 +85,23 @@ export const TopHeader: React.FC = () => {
         <button
           onClick={() => setIsLogoMenuOpen(!isLogoMenuOpen)}
           className="clay-dock rounded-full px-3.5 py-1.5 flex items-center gap-2.5 shadow-lg border border-slate-300 dark:border-white/15 hover:border-cyan-500 dark:hover:border-cyan-400/40 hover:scale-[1.02] active:scale-95 transition-all group text-left focus:outline-hidden"
-          title="Klik Kapsul Logo F untuk membuka Menu Navigasi"
+          title="Klik Kapsul Logo Fahgit untuk membuka Menu Navigasi"
           aria-expanded={isLogoMenuOpen}
         >
-          {/* F Icon Badge with real 3D App Logo */}
-          <div className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-tr from-cyan-400 via-blue-500 to-indigo-600 text-white font-black text-sm flex items-center justify-center tracking-tighter clay-button-rgb shadow-md relative shrink-0">
+          {/* App Icon Badge */}
+          <div className="w-8 h-8 relative shrink-0 flex items-center justify-center">
             <img
               src="./icon.png"
-              alt="FAHGIT"
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
+              alt="Fahgit"
+              className="w-8 h-8 rounded-xl object-contain drop-shadow-md"
             />
             <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-white dark:ring-[#0A0F1D]" />
           </div>
 
           {/* Brand & Active Pill Status */}
           <div className="flex items-center gap-2 pr-1">
-            <span className="font-black text-slate-900 dark:text-white tracking-wider text-xs uppercase font-mono group-hover:text-cyan-600 dark:group-hover:text-cyan-300 transition-colors">
-              FAHGIT
+            <span className="font-black text-slate-900 dark:text-white tracking-wide text-sm font-mono group-hover:text-cyan-600 dark:group-hover:text-cyan-300 transition-colors">
+              Fahgit
             </span>
 
             <span className="hidden sm:inline-block text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30 font-medium">
@@ -124,9 +121,9 @@ export const TopHeader: React.FC = () => {
           <div className="absolute top-14 left-0 w-72 clay-dock rounded-3xl p-3.5 shadow-2xl border border-slate-200 dark:border-white/20 animate-in fade-in zoom-in-95 duration-150 z-50">
             {/* Header Popup */}
             <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-200 dark:border-white/10 px-2 text-xs">
-              <span className="font-bold text-slate-900 dark:text-white uppercase tracking-wider text-[11px] font-mono flex items-center gap-1.5">
+              <span className="font-bold text-slate-900 dark:text-white tracking-wider text-[11px] font-mono flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-cyan-500 dark:text-cyan-400" />
-                Menu Navigasi FAHGIT
+                Menu Navigasi Fahgit
               </span>
               <button
                 onClick={() => setIsLogoMenuOpen(false)}

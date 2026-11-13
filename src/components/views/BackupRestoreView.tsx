@@ -46,7 +46,7 @@ export const BackupRestoreView: React.FC = () => {
   // Export encrypted backup configuration
   const handleExportBackup = async () => {
     const backupData = {
-      app: 'FAHGIT',
+      app: 'Fahgit',
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
       vault: vaultInfo,
@@ -69,8 +69,8 @@ export const BackupRestoreView: React.FC = () => {
       const text = await file.text();
       const data = JSON.parse(text);
 
-      if (!data.app || data.app !== 'FAHGIT') {
-        notify('error', 'Berkas cadangan tidak valid untuk aplikasi FAHGIT.', 'Gagal Pulihkan');
+      if (!data.app || (data.app !== 'Fahgit' && data.app !== 'FAHGIT')) {
+        notify('error', 'Berkas cadangan tidak valid untuk aplikasi Fahgit.', 'Gagal Pulihkan');
         return;
       }
 

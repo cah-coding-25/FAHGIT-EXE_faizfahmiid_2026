@@ -80,7 +80,7 @@ export const Sidebar: React.FC<{ isOpenMobile: boolean; onCloseMobile: () => voi
     { id: 'backup-restore', label: 'Backup & Restore', icon: Database },
     { id: 'connection', label: 'GitHub Connection', icon: KeyRound },
     { id: 'settings', label: 'Settings', icon: Settings },
-    { id: 'about', label: 'About FAHGIT', icon: HelpCircle },
+    { id: 'about', label: 'About Fahgit', icon: HelpCircle },
   ];
 
   const handleNavClick = (targetView: AppView) => {
@@ -110,12 +110,14 @@ export const Sidebar: React.FC<{ isOpenMobile: boolean; onCloseMobile: () => voi
             onClick={() => handleNavClick('dashboard')}
             className="flex items-center gap-2.5 text-left group"
           >
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white font-bold text-base shadow-sm ring-1 ring-white/10 group-hover:scale-105 transition-transform">
-              F
-            </div>
+            <img
+              src="./icon.png"
+              alt="Fahgit"
+              className="w-8 h-8 rounded-xl object-contain shadow-sm group-hover:scale-105 transition-transform shrink-0"
+            />
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-white tracking-tight text-base font-mono">FAHGIT</span>
+                <span className="font-bold text-white tracking-tight text-base font-mono">Fahgit</span>
                 <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">PRO</span>
               </div>
               <p className="text-[11px] text-slate-400 font-medium">by: Faiz_Fahmi_ID</p>

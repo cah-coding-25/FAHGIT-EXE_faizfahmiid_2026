@@ -1,8 +1,8 @@
 {
   "name": "fahgit",
-  "productName": "FAHGIT",
+  "productName": "Fahgit",
   "version": "1.0.0",
-  "description": "FAHGIT by: Faiz_Fahmi_ID - Professional GitHub Repository & File Manager Platform",
+  "description": "Fahgit by: Faiz_Fahmi_ID - Professional GitHub Repository & File Manager Platform",
   "author": "Faiz_Fahmi_ID",
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.faizfahmi.fahgit",
-    "productName": "FAHGIT",
+    "productName": "Fahgit",
     "copyright": "Copyright © 2026 Faiz_Fahmi_ID",
     "directories": {
       "output": "release"
@@ -66,8 +66,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "FAHGIT",
-      "uninstallDisplayName": "FAHGIT by Faiz_Fahmi_ID",
+      "shortcutName": "Fahgit",
+      "uninstallDisplayName": "Fahgit by Faiz_Fahmi_ID",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "portable": {

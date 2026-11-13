@@ -226,7 +226,7 @@ export const ConnectionView: React.FC = () => {
                 </div>
                 <strong className="block text-white mb-1">Centang Izin "repo"</strong>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Beri nama (misal: <em>FAHGIT</em>) dan centang kotak <strong>repo</strong> agar aplikasi bisa melihat dan mengedit file.
+                  Beri nama (misal: <em>Fahgit</em>) dan centang kotak <strong>repo</strong> agar aplikasi bisa melihat dan mengedit file.
                 </p>
               </div>
 

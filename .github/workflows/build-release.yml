@@ -1,4 +1,4 @@
-name: FAHGIT Windows Desktop Release
+name: Fahgit Windows Desktop Release
 
 on:
   push:
@@ -54,7 +54,7 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path "release/win-unpacked") {
-            Compress-Archive -Path "release/win-unpacked/*" -DestinationPath "release/FAHGIT-win-unpacked.zip" -Force
+            Compress-Archive -Path "release/win-unpacked/*" -DestinationPath "release/Fahgit-win-unpacked.zip" -Force
           }
 
       - name: 8. Generate SHA256 Checksums
@@ -90,15 +90,15 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: FAHGIT ${{ env.RELEASE_TAG }} by Faiz_Fahmi_ID
+          name: Fahgit ${{ env.RELEASE_TAG }} by Faiz_Fahmi_ID
           body: |
-            ## FAHGIT by: Faiz_Fahmi_ID — Windows Desktop Release (${{ env.RELEASE_TAG }})
+            ## Fahgit by: Faiz_Fahmi_ID — Windows Desktop Release (${{ env.RELEASE_TAG }})
             *Your GitHub. Your Files. Your Control.*
 
             ### Distribusi Windows yang Tersedia:
-            1. **Windows Installer (Setup)**: `FAHGIT-Setup-*.exe` (Mendukung instalasi Windows, shortcut, dan Auto-Update otomatis via `electron-updater`).
-            2. **Windows Portable**: `FAHGIT-Portable-*.exe` (Dapat langsung dijalankan tanpa instalasi dari USB flash disk / folder mana pun).
-            3. **Unpacked Application (ZIP)**: `FAHGIT-win-unpacked.zip` (Folder aplikasi siap pakai tanpa installer).
+            1. **Windows Installer (Setup)**: `Fahgit-Setup-*.exe` (Mendukung instalasi Windows, shortcut, dan Auto-Update otomatis via `electron-updater`).
+            2. **Windows Portable**: `Fahgit-Portable-*.exe` (Dapat langsung dijalankan tanpa instalasi dari USB flash disk / folder mana pun).
+            3. **Unpacked Application (ZIP)**: `Fahgit-win-unpacked.zip` (Folder aplikasi siap pakai tanpa installer).
             4. **Manifest Auto-Update**: `latest.yml` (Metadata verifikasi untuk sistem Auto-Update otomatis).
             5. **Integritas & Checksum**: `checksums-sha256.txt` (Daftar hash SHA-256 untuk verifikasi keamanan setiap file).
 

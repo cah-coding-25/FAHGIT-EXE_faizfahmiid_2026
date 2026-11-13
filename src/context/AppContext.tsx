@@ -95,6 +95,7 @@ interface AppContextValue {
   updateTabContent: (tabId: string, content: string) => void;
   openInEditor: (path: string, sha: string) => Promise<void>;
   closeEditorTab: (tabId: string) => void;
+  closeEditorTabsByPaths: (paths: Set<string>) => void;
   saveActiveEditorTab: (commitMessage: string) => Promise<boolean>;
   // Favorites & Recents
   favorites: { repos: string[]; files: string[] };
@@ -600,6 +601,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         refreshActivityLogs();
       } catch (err) {
+        if (err instanceof GitHubApiError && (err.status === 404 || err.status === 409)) {
+          setTreeItems([]);
+        }
         notify('error', err instanceof Error ? err.message : `Failed to switch branch to ${branchName}`, 'Error');
       } finally {
         setIsLoadingTree(false);
@@ -616,6 +620,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const treeData = await getGitTree(token, activeRepo.owner.login, activeRepo.name, activeBranch);
       setTreeItems(treeData.tree || []);
     } catch (err) {
+      if (err instanceof GitHubApiError && (err.status === 404 || err.status === 409)) {
+        setTreeItems([]);
+      }
       notify('error', err instanceof Error ? err.message : 'Failed to refresh tree', 'Error');
     } finally {
       setIsLoadingTree(false);
@@ -693,6 +700,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     },
     [activeTabId]
+  );
+
+  const closeEditorTabsByPaths = useCallback(
+    (paths: Set<string>) => {
+      if (!activeRepo || paths.size === 0) return;
+      setEditorTabs((prev) => {
+        const remaining = prev.filter(
+          (t) => !(t.id.startsWith(`${activeRepo.full_name}:`) && paths.has(t.path))
+        );
+        if (activeTabId && !remaining.some((t) => t.id === activeTabId)) {
+          setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+        }
+        return remaining;
+      });
+    },
+    [activeRepo, activeTabId]
   );
 
   const updateTabContent = useCallback((tabId: string, content: string) => {
@@ -847,6 +870,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateTabContent,
         openInEditor,
         closeEditorTab,
+        closeEditorTabsByPaths,
         saveActiveEditorTab,
         favorites,
         toggleFavoriteRepo,

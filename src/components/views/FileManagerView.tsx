@@ -10,7 +10,7 @@
  * 6. Responsif: Split-pane pada Desktop/Tablet, Pill Switcher pada Mobile/Android
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import { useApp } from '../../context/AppContext';
 import { FileItem } from '../../types';
@@ -19,7 +19,10 @@ import {
   saveFile,
   deleteFile,
   getBlob,
+  createBatchCommit,
+  TreeEntryInput,
 } from '../../services/github';
+import { addActivityLog } from '../../services/storage';
 import {
   isImageFile,
   utf8ToBase64,
@@ -46,12 +49,22 @@ import {
   FileCode,
   FolderGit2,
   Edit3,
-  Move,
   Code2,
   Files,
   Loader2,
-  Sparkles,
+  CheckSquare,
+  Square,
+  Check,
+  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
+
+function normalizeGitMode(mode?: string): TreeEntryInput['mode'] {
+  if (mode === '100755' || mode === '120000' || mode === '160000') {
+    return mode;
+  }
+  return '100644';
+}
 
 export const FileManagerView: React.FC = () => {
   const {
@@ -69,6 +82,8 @@ export const FileManagerView: React.FC = () => {
     updateTabContent,
     openInEditor,
     closeEditorTab,
+    closeEditorTabsByPaths,
+    refreshActivityLogs,
     saveActiveEditorTab,
     settings,
     notify,
@@ -80,29 +95,41 @@ export const FileManagerView: React.FC = () => {
   // Filter pencarian berkas
   const [searchFilter, setSearchFilter] = useState('');
 
+  // Umpan balik visual inline di panel penjelajah
+  const [explorerFeedback, setExplorerFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  // Pilihan banyak item (checkbox multi-select)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+
   // Modals Penjelajah
   const [isNewFileModal, setIsNewFileModal] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [newFileContent, setNewFileContent] = useState('');
   const [newFileCommitMsg, setNewFileCommitMsg] = useState('');
   const [isSubmittingNewFile, setIsSubmittingNewFile] = useState(false);
+  const [newFileError, setNewFileError] = useState<string | null>(null);
 
   const [isNewFolderModal, setIsNewFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [isSubmittingFolder, setIsSubmittingFolder] = useState(false);
+  const [newFolderError, setNewFolderError] = useState<string | null>(null);
 
   // Rename modal
   const [renameTarget, setRenameTarget] = useState<FileItem | null>(null);
   const [renameNewName, setRenameNewName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
-  // Move modal
-  const [moveTarget, setMoveTarget] = useState<FileItem | null>(null);
-  const [moveDestinationPath, setMoveDestinationPath] = useState('');
-  const [isMoving, setIsMoving] = useState(false);
-
-  // Delete modal
+  // Delete single (file atau folder), bulk delete, dan wipe seluruh repo/folder
   const [deleteTarget, setDeleteTarget] = useState<FileItem | null>(null);
+  const [isBulkDeleteModal, setIsBulkDeleteModal] = useState(false);
+  const [isWipeModalOpen, setIsWipeModalOpen] = useState(false);
+  const [wipeScope, setWipeScope] = useState<'repo' | 'folder'>('repo');
+  const [deleteCommitMsg, setDeleteCommitMsg] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Image preview modal
@@ -121,6 +148,17 @@ export const FileManagerView: React.FC = () => {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const activeTab = editorTabs.find((t) => t.id === activeTabId);
+
+  // Bersihkan pilihan checkbox saat pindah repositori, cabang, atau folder
+  useEffect(() => {
+    setSelectedPaths(new Set());
+  }, [activeRepo?.full_name, activeBranch, currentPath]);
+
+  // Daftar seluruh item leaf (blob/commit) pada cabang aktif
+  const allLeafItems = useMemo(
+    () => (treeItems || []).filter((i) => i.type !== 'tree'),
+    [treeItems]
+  );
 
   // Filter item di folder saat ini
   const currentItems = useMemo<FileItem[]>(() => {
@@ -252,6 +290,7 @@ export const FileManagerView: React.FC = () => {
     if (!token || !activeRepo || !newFileName.trim()) return;
 
     setIsSubmittingNewFile(true);
+    setNewFileError(null);
     try {
       const cleanPath = currentPath
         ? `${currentPath.replace(/^\/+|\/+$/g, '')}/${newFileName.trim()}`
@@ -267,7 +306,10 @@ export const FileManagerView: React.FC = () => {
         activeBranch
       );
 
-      notify('success', `Berkas '${cleanPath}' berhasil dibuat!`, 'Berkas Dibuat');
+      setExplorerFeedback({
+        type: 'success',
+        message: `Berkas '${cleanPath}' berhasil dibuat.`,
+      });
       setIsNewFileModal(false);
       setNewFileName('');
       setNewFileContent('');
@@ -279,7 +321,7 @@ export const FileManagerView: React.FC = () => {
         setMobileTab('editor');
       }
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal membuat file', 'Error');
+      setNewFileError(err instanceof Error ? err.message : 'Gagal membuat berkas');
     } finally {
       setIsSubmittingNewFile(false);
     }
@@ -291,6 +333,7 @@ export const FileManagerView: React.FC = () => {
     if (!token || !activeRepo || !newFolderName.trim()) return;
 
     setIsSubmittingFolder(true);
+    setNewFolderError(null);
     try {
       const cleanFolder = newFolderName.trim().replace(/^\/+|\/+$/g, '');
       const cleanPath = currentPath
@@ -307,46 +350,265 @@ export const FileManagerView: React.FC = () => {
         activeBranch
       );
 
-      notify('success', `Folder '${cleanFolder}' berhasil dibuat!`, 'Folder Dibuat');
+      setExplorerFeedback({
+        type: 'success',
+        message: `Folder '${cleanFolder}' berhasil dibuat.`,
+      });
       setIsNewFolderModal(false);
       setNewFolderName('');
       await refreshTree();
       setCurrentPath(currentPath ? `${currentPath}/${cleanFolder}` : cleanFolder);
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal membuat folder', 'Error');
+      setNewFolderError(err instanceof Error ? err.message : 'Gagal membuat folder');
     } finally {
       setIsSubmittingFolder(false);
     }
   };
 
-  // Hapus berkas
+  // Hitung total berkas leaf yang terdampak oleh sekumpulan path (file maupun folder)
+  const getAffectedLeaves = (targetPaths: string[]) => {
+    if (targetPaths.length === 0) return [];
+    return allLeafItems.filter((item) =>
+      targetPaths.some((tp) => item.path === tp || item.path.startsWith(`${tp}/`))
+    );
+  };
+
+  // Eksekusi penghapusan atomik untuk daftar path (file, folder, beberapa pilihan, maupun seluruh repositori)
+  const executePathsDeletion = async (
+    targetPaths: string[],
+    commitMsg: string,
+    successSummary: string,
+    logAction: 'FILE_DELETED' | 'FOLDER_DELETED'
+  ): Promise<boolean> => {
+    if (!token || !activeRepo || !activeBranch || targetPaths.length === 0) return false;
+
+    const matchesTarget = (itemPath: string) =>
+      targetPaths.some((tp) => itemPath === tp || itemPath.startsWith(`${tp}/`));
+
+    const targetedItems = allLeafItems.filter((item) => matchesTarget(item.path));
+    const remainingItems = allLeafItems.filter((item) => !matchesTarget(item.path));
+
+    if (targetedItems.length === 0) {
+      await refreshTree();
+      return true;
+    }
+
+    const owner = activeRepo.owner.login;
+    const repo = activeRepo.name;
+
+    if (remainingItems.length > 0) {
+      // Hapus seluruh target beserta folder-nya dalam 1 commit atomik (tanpa base_tree)
+      const remainingEntries: TreeEntryInput[] = remainingItems.map((item) => ({
+        path: item.path,
+        mode: normalizeGitMode(item.mode),
+        type: item.type === 'commit' ? 'commit' : 'blob',
+        sha: item.sha,
+      }));
+
+      await createBatchCommit(
+        token,
+        owner,
+        repo,
+        activeBranch,
+        remainingEntries,
+        commitMsg,
+        { replaceTree: true }
+      );
+    } else {
+      // Menghapus SELURUH isi repositori / file terakhir di cabang aktif
+      try {
+        await createBatchCommit(
+          token,
+          owner,
+          repo,
+          activeBranch,
+          [],
+          commitMsg,
+          { replaceTree: true }
+        );
+      } catch (emptyTreeErr) {
+        // Fallback jika GitHub menolak tree kosong via Git Trees API:
+        // sisakan 1 blob dalam 1 batch commit (jika >1 file), lalu hapus blob terakhir via Contents API
+        const targetedBlobs = targetedItems.filter((i) => i.type === 'blob');
+        if (targetedBlobs.length === 0) {
+          throw emptyTreeErr;
+        }
+
+        if (targetedBlobs.length > 1) {
+          const lastBlob = targetedBlobs[targetedBlobs.length - 1];
+          await createBatchCommit(
+            token,
+            owner,
+            repo,
+            activeBranch,
+            [
+              {
+                path: lastBlob.path,
+                mode: normalizeGitMode(lastBlob.mode),
+                type: 'blob',
+                sha: lastBlob.sha,
+              },
+            ],
+            `${commitMsg} (tahap pembersihan)`,
+            { replaceTree: true }
+          );
+          await deleteFile(token, owner, repo, lastBlob.path, lastBlob.sha, commitMsg, activeBranch);
+        } else {
+          const singleBlob = targetedBlobs[0];
+          await deleteFile(token, owner, repo, singleBlob.path, singleBlob.sha, commitMsg, activeBranch);
+        }
+      }
+    }
+
+    // Tutup seluruh tab editor yang berkasnya ikut terhapus
+    closeEditorTabsByPaths(new Set(targetedItems.map((i) => i.path)));
+    setSelectedPaths(new Set());
+
+    // Jika repo kosong atau folder aktif ikut terhapus, kembali ke root
+    if (
+      remainingItems.length === 0 ||
+      (currentPath && targetPaths.some((tp) => currentPath === tp || currentPath.startsWith(`${tp}/`)))
+    ) {
+      setCurrentPath('');
+    }
+
+    await addActivityLog({
+      action: logAction,
+      repo: activeRepo.full_name,
+      target: targetPaths.length === 1 ? targetPaths[0] : `${targetPaths.length} item`,
+      status: 'SUCCESS',
+      details: `${successSummary} (${targetedItems.length} berkas pada cabang ${activeBranch})`,
+    });
+    refreshActivityLogs();
+
+    await refreshTree();
+    setExplorerFeedback({
+      type: 'success',
+      message: successSummary,
+    });
+    return true;
+  };
+
+  // Toggle pilih 1 item (file/folder)
+  const toggleSelectPath = (path: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
+
+  // Toggle pilih semua item yang terlihat di folder saat ini
+  const allVisibleSelected =
+    currentItems.length > 0 && currentItems.every((item) => selectedPaths.has(item.path));
+
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedPaths(new Set());
+    } else {
+      setSelectedPaths(new Set(currentItems.map((item) => item.path)));
+    }
+  };
+
+  // Hapus 1 berkas atau 1 folder beserta seluruh isinya
   const handleDeleteSubmit = async () => {
-    if (!token || !activeRepo || !deleteTarget) return;
+    if (!deleteTarget) return;
 
     setIsDeleting(true);
+    setDeleteError(null);
     try {
-      await deleteFile(
-        token,
-        activeRepo.owner.login,
-        activeRepo.name,
-        deleteTarget.path,
-        deleteTarget.sha,
-        `Hapus ${deleteTarget.path}`,
-        activeBranch
+      const isFolder = deleteTarget.type === 'folder';
+      const defaultMsg = isFolder
+        ? `Hapus folder ${deleteTarget.path} beserta seluruh isinya`
+        : `Hapus ${deleteTarget.path}`;
+      const affectedCount = isFolder ? getAffectedLeaves([deleteTarget.path]).length : 1;
+      const summary = isFolder
+        ? `Folder '${deleteTarget.name}' beserta ${affectedCount} berkas di dalamnya berhasil dihapus.`
+        : `Berkas '${deleteTarget.name}' berhasil dihapus.`;
+
+      await executePathsDeletion(
+        [deleteTarget.path],
+        deleteCommitMsg.trim() || defaultMsg,
+        summary,
+        isFolder ? 'FOLDER_DELETED' : 'FILE_DELETED'
       );
-
-      notify('success', `Berkas '${deleteTarget.name}' berhasil dihapus.`, 'Berkas Dihapus');
-
-      // Jika berkas ini sedang terbuka di editor, tutup tabnya
-      const tabToClose = editorTabs.find((t) => t.path === deleteTarget.path);
-      if (tabToClose) {
-        closeEditorTab(tabToClose.id);
-      }
-
       setDeleteTarget(null);
-      await refreshTree();
+      setDeleteCommitMsg('');
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal menghapus berkas', 'Error');
+      setDeleteError(err instanceof Error ? err.message : 'Gagal menghapus item dari repositori.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Hapus banyak item terpilih (file & folder)
+  const handleBulkDeleteSubmit = async () => {
+    const targets = Array.from(selectedPaths);
+    if (targets.length === 0) return;
+
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      const affectedCount = getAffectedLeaves(targets).length;
+      const defaultMsg = `Hapus ${targets.length} item terpilih (${affectedCount} berkas)`;
+      await executePathsDeletion(
+        targets,
+        deleteCommitMsg.trim() || defaultMsg,
+        `${targets.length} item terpilih (${affectedCount} berkas) berhasil dihapus.`,
+        'FOLDER_DELETED'
+      );
+      setIsBulkDeleteModal(false);
+      setDeleteCommitMsg('');
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Gagal menghapus item terpilih.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Hapus SELURUH file dan folder (Repositori penuh atau Folder saat ini)
+  const handleWipeAllSubmit = async () => {
+    if (!activeRepo) return;
+
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      const targetPaths =
+        wipeScope === 'folder' && currentPath
+          ? [currentPath]
+          : Array.from(new Set(allLeafItems.map((i) => i.path.split('/')[0])));
+
+      const affectedCount =
+        wipeScope === 'folder' && currentPath
+          ? getAffectedLeaves([currentPath]).length
+          : allLeafItems.length;
+
+      const defaultMsg =
+        wipeScope === 'folder' && currentPath
+          ? `Hapus seluruh isi folder ${currentPath}`
+          : `Hapus seluruh file & folder di repositori ${activeRepo.name}`;
+
+      const summary =
+        wipeScope === 'folder' && currentPath
+          ? `Seluruh isi folder '${currentPath}' (${affectedCount} berkas) berhasil dihapus.`
+          : `Seluruh file & folder (${affectedCount} berkas) di repositori '${activeRepo.name}' berhasil dihapus.`;
+
+      await executePathsDeletion(
+        targetPaths,
+        deleteCommitMsg.trim() || defaultMsg,
+        summary,
+        'FOLDER_DELETED'
+      );
+      setIsWipeModalOpen(false);
+      setDeleteCommitMsg('');
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : 'Gagal menghapus seluruh file & folder.'
+      );
     } finally {
       setIsDeleting(false);
     }
@@ -358,6 +620,7 @@ export const FileManagerView: React.FC = () => {
     if (!token || !activeRepo || !renameTarget || !renameNewName.trim()) return;
 
     setIsRenaming(true);
+    setRenameError(null);
     try {
       const parentDir = renameTarget.path.includes('/')
         ? renameTarget.path.substring(0, renameTarget.path.lastIndexOf('/'))
@@ -387,12 +650,15 @@ export const FileManagerView: React.FC = () => {
         activeBranch
       );
 
-      notify('success', `Berhasil mengganti nama menjadi '${renameNewName.trim()}'`, 'Selesai');
+      setExplorerFeedback({
+        type: 'success',
+        message: `Berkas berhasil diganti nama menjadi '${renameNewName.trim()}'.`,
+      });
       setRenameTarget(null);
       setRenameNewName('');
       await refreshTree();
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal mengganti nama', 'Error');
+      setRenameError(err instanceof Error ? err.message : 'Gagal mengganti nama berkas.');
     } finally {
       setIsRenaming(false);
     }
@@ -409,11 +675,12 @@ export const FileManagerView: React.FC = () => {
       );
 
       if (itemsInFolder.length === 0) {
-        notify('warning', 'Tidak ada berkas di dalam folder ini untuk diunduh.', 'Folder Kosong');
+        setExplorerFeedback({
+          type: 'error',
+          message: 'Tidak ada berkas di dalam folder ini untuk diunduh.',
+        });
         return;
       }
-
-      notify('info', `Mengemas ${itemsInFolder.length} berkas menjadi ZIP...`, 'Memproses Unduhan');
 
       const filePayloads = await Promise.all(
         itemsInFolder.map(async (item) => {
@@ -430,9 +697,15 @@ export const FileManagerView: React.FC = () => {
       const zipBlob = await createZipFromFiles(filePayloads);
       const zipFileName = `${activeRepo.name}-${currentPath ? currentPath.replace(/\//g, '-') : 'root'}.zip`;
       triggerDownload(zipBlob, zipFileName);
-      notify('success', `Arsip ${zipFileName} siap diunduh!`, 'Unduh Sukses');
+      setExplorerFeedback({
+        type: 'success',
+        message: `Arsip '${zipFileName}' (${itemsInFolder.length} berkas) siap diunduh.`,
+      });
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Gagal mengemas folder ZIP', 'Error');
+      setExplorerFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal mengemas folder ZIP.',
+      });
     } finally {
       setIsZipping(false);
     }
@@ -559,11 +832,14 @@ export const FileManagerView: React.FC = () => {
             mobileTab === 'explorer' ? 'flex' : 'hidden md:flex'
           }`}
         >
-          {/* Action Toolbar Penjelajah: Tambah File, Tambah Folder, Unduh ZIP */}
+          {/* Action Toolbar Penjelajah: Tambah File, Tambah Folder, Unduh ZIP, Hapus Semua, Refresh */}
           <div className="flex items-center justify-between gap-1.5 pb-3 border-b border-slate-200 dark:border-white/10">
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => setIsNewFileModal(true)}
+                onClick={() => {
+                  setNewFileError(null);
+                  setIsNewFileModal(true);
+                }}
                 className="p-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-xs font-bold clay-button-rgb shadow-sm hover:scale-105 transition-transform"
                 title="Buat Berkas Baru"
               >
@@ -571,7 +847,10 @@ export const FileManagerView: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setIsNewFolderModal(true)}
+                onClick={() => {
+                  setNewFolderError(null);
+                  setIsNewFolderModal(true);
+                }}
                 className="p-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white text-xs font-bold clay-button-rgb shadow-sm hover:scale-105 transition-transform"
                 title="Buat Folder Baru"
               >
@@ -580,23 +859,68 @@ export const FileManagerView: React.FC = () => {
 
               <button
                 onClick={handleDownloadFolderZip}
-                disabled={isZipping}
-                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-700 text-xs transition-colors"
+                disabled={isZipping || allLeafItems.length === 0}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-700 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Unduh Isi Folder Ini sebagai ZIP"
               >
                 <Download className="w-4 h-4" />
               </button>
             </div>
 
-            <button
-              onClick={() => refreshTree()}
-              disabled={isLoadingTree}
-              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-cyan-600 dark:hover:text-cyan-400 text-xs transition-colors"
-              title="Muat Ulang Berkas"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoadingTree ? 'animate-spin text-cyan-500 dark:text-cyan-400' : ''}`} />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeleteCommitMsg('');
+                  setWipeScope('repo');
+                  setIsWipeModalOpen(true);
+                }}
+                disabled={!activeRepo || allLeafItems.length === 0 || isLoadingTree}
+                className="px-2.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-[11px] font-bold transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Hapus Seluruh File & Folder di Repositori"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus Semua</span>
+              </button>
+
+              <button
+                onClick={() => refreshTree()}
+                disabled={isLoadingTree}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-cyan-600 dark:hover:text-cyan-400 text-xs transition-colors"
+                title="Muat Ulang Berkas"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoadingTree ? 'animate-spin text-cyan-500 dark:text-cyan-400' : ''}`} />
+              </button>
+            </div>
           </div>
+
+          {/* Inline Feedback Banner Penjelajah */}
+          {explorerFeedback && (
+            <div
+              className={`mt-2.5 px-3 py-2 rounded-xl text-[11px] font-medium flex items-start justify-between gap-2 border ${
+                explorerFeedback.type === 'success'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              <div className="flex items-start gap-2 min-w-0">
+                {explorerFeedback.type === 'success' ? (
+                  <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                )}
+                <span className="leading-snug break-words">{explorerFeedback.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExplorerFeedback(null)}
+                className="opacity-70 hover:opacity-100 shrink-0"
+                title="Tutup"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Breadcrumb Path & Search Bar */}
           <div className="py-2.5 space-y-2 border-b border-slate-200 dark:border-white/10">
@@ -643,6 +967,39 @@ export const FileManagerView: React.FC = () => {
                 </button>
               )}
             </div>
+
+            {/* Bar Multi-Pilih & Hapus Terpilih */}
+            {currentItems.length > 0 && (
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={toggleSelectAllVisible}
+                  className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-300 transition-colors"
+                >
+                  {allVisibleSelected ? (
+                    <CheckSquare className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+                  ) : (
+                    <Square className="w-3.5 h-3.5" />
+                  )}
+                  <span>{allVisibleSelected ? 'Batal Pilih Semua' : 'Pilih Semua'}</span>
+                </button>
+
+                {selectedPaths.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteCommitMsg('');
+                      setIsBulkDeleteModal(true);
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-sm transition-colors"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Hapus Terpilih ({selectedPaths.size})</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Daftar Berkas & Folder */}
@@ -651,75 +1008,103 @@ export const FileManagerView: React.FC = () => {
             {currentPath && (
               <div
                 onClick={handleNavigateUp}
-                className="flex items-center gap-2 p-2 rounded-xl text-xs text-slate-400 hover:text-white hover:bg-white/5 cursor-pointer transition-colors"
+                className="flex items-center gap-2 p-2 rounded-xl text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer transition-colors"
               >
-                <ArrowLeft className="w-3.5 h-3.5 text-amber-400" />
+                <ArrowLeft className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
                 <span className="font-mono">.. (Folder Sebelumnya)</span>
               </div>
             )}
 
             {isLoadingTree ? (
-              <div className="py-12 text-center text-slate-400 text-xs space-y-2">
-                <Loader2 className="w-6 h-6 animate-spin text-cyan-400 mx-auto" />
+              <div className="py-12 text-center text-slate-500 dark:text-slate-400 text-xs space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin text-cyan-500 dark:text-cyan-400 mx-auto" />
                 <span>Memuat berkas repositori...</span>
               </div>
             ) : currentItems.length === 0 ? (
-              <div className="py-12 text-center text-slate-500 text-xs">
-                <span>Folder ini masih kosong atau tidak ada berkas yang cocok.</span>
+              <div className="py-12 text-center text-slate-500 text-xs space-y-1">
+                <span>
+                  {allLeafItems.length === 0
+                    ? 'Repositori ini kosong (tidak ada file atau folder).'
+                    : 'Folder ini masih kosong atau tidak ada berkas yang cocok.'}
+                </span>
               </div>
             ) : (
               currentItems.map((item) => {
                 const isItemActiveInEditor = activeTab?.path === item.path;
+                const isSelected = selectedPaths.has(item.path);
 
                 return (
                   <div
                     key={item.path}
                     className={`group flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition-all ${
                       isItemActiveInEditor
-                        ? 'bg-cyan-500/15 border border-cyan-400/40 text-cyan-200'
-                        : 'hover:bg-white/5 text-slate-200'
+                        ? 'bg-cyan-500/15 border border-cyan-400/40 text-cyan-800 dark:text-cyan-200'
+                        : isSelected
+                        ? 'bg-rose-500/10 border border-rose-500/30 text-slate-900 dark:text-white'
+                        : 'hover:bg-slate-100 dark:hover:bg-white/5 text-slate-800 dark:text-slate-200'
                     }`}
                   >
-                    <div
-                      onClick={() => handleFileClick(item)}
-                      className="flex items-center gap-2 min-w-0 flex-1 mr-2"
-                    >
-                      {item.type === 'folder' ? (
-                        <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
-                      ) : (
-                        <FileIcon filename={item.name} className="w-4 h-4 shrink-0" />
-                      )}
-                      <span className="truncate font-mono">{item.name}</span>
+                    <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectPath(item.path);
+                        }}
+                        className="p-0.5 text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 shrink-0"
+                        title={isSelected ? 'Batal Pilih' : 'Pilih Item Ini'}
+                      >
+                        {isSelected ? (
+                          <CheckSquare className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
+                        ) : (
+                          <Square className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
+                        )}
+                      </button>
+
+                      <div
+                        onClick={() => handleFileClick(item)}
+                        className="flex items-center gap-2 min-w-0 flex-1"
+                      >
+                        {item.type === 'folder' ? (
+                          <FolderOpen className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" />
+                        ) : (
+                          <FileIcon filename={item.name} className="w-4 h-4 shrink-0" />
+                        )}
+                        <span className="truncate font-mono">{item.name}</span>
+                      </div>
                     </div>
 
-                    {/* Aksi Berkas: Rename & Hapus */}
-                    <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    {/* Aksi Item: Rename (file) & Hapus (file maupun folder) */}
+                    <div className="flex items-center gap-1 opacity-90 sm:opacity-70 group-hover:opacity-100 transition-opacity shrink-0">
                       {item.type === 'file' && (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRenameTarget(item);
-                              setRenameNewName(item.name);
-                            }}
-                            className="p-1 hover:text-cyan-400 text-slate-400"
-                            title="Ganti Nama"
-                          >
-                            <Edit3 className="w-3 h-3" />
-                          </button>
-
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteTarget(item);
-                            }}
-                            className="p-1 hover:text-rose-400 text-slate-400"
-                            title="Hapus Berkas"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenameError(null);
+                            setRenameTarget(item);
+                            setRenameNewName(item.name);
+                          }}
+                          className="p-1 hover:text-cyan-600 dark:hover:text-cyan-400 text-slate-500 dark:text-slate-400 rounded-md"
+                          title="Ganti Nama Berkas"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
                       )}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteError(null);
+                          setDeleteCommitMsg('');
+                          setDeleteTarget(item);
+                        }}
+                        className="p-1 hover:text-rose-600 dark:hover:text-rose-400 text-slate-500 dark:text-slate-400 rounded-md"
+                        title={item.type === 'folder' ? 'Hapus Folder beserta Isinya' : 'Hapus Berkas'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 );
@@ -994,6 +1379,11 @@ export const FileManagerView: React.FC = () => {
                   {isSubmittingNewFile ? 'Membuat...' : 'Buat Berkas'}
                 </button>
               </div>
+              {newFileError && (
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-500 dark:text-rose-400">
+                  {newFileError}
+                </div>
+              )}
             </form>
           </div>
         </div>
@@ -1026,6 +1416,12 @@ export const FileManagerView: React.FC = () => {
                   className="w-full bg-white dark:bg-[#0F172A] border border-slate-300 dark:border-white/10 rounded-2xl px-3.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-cyan-500 font-mono"
                 />
               </div>
+
+              {newFolderError && (
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-500 dark:text-rose-400">
+                  {newFolderError}
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <button
@@ -1101,21 +1497,58 @@ export const FileManagerView: React.FC = () => {
         </div>
       )}
 
-      {/* Modal Konfirmasi Hapus Berkas */}
+      {/* Modal Konfirmasi Hapus 1 File atau 1 Folder */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="clay-card rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-200 dark:border-white/20 space-y-4">
+          <div className="clay-card rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200 dark:border-white/20 space-y-4">
             <h3 className="text-sm font-bold text-rose-500 dark:text-rose-400 flex items-center gap-2">
               <Trash2 className="w-4 h-4" />
-              Hapus Berkas Ini?
+              {deleteTarget.type === 'folder' ? 'Hapus Folder Ini?' : 'Hapus Berkas Ini?'}
             </h3>
-            <p className="text-xs text-slate-700 dark:text-slate-300">
-              Apakah Anda yakin ingin menghapus <strong>{deleteTarget.name}</strong> dari cabang{' '}
-              <strong>{activeBranch}</strong>? Tindakan ini akan membuat commit penghapusan.
+            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              {deleteTarget.type === 'folder' ? (
+                <>
+                  Apakah Anda yakin ingin menghapus folder{' '}
+                  <strong className="font-mono text-rose-600 dark:text-rose-300">{deleteTarget.path}</strong>{' '}
+                  beserta seluruh <strong>{getAffectedLeaves([deleteTarget.path]).length} berkas</strong> di dalamnya dari cabang{' '}
+                  <strong>{activeBranch}</strong>?
+                </>
+              ) : (
+                <>
+                  Apakah Anda yakin ingin menghapus berkas{' '}
+                  <strong className="font-mono text-rose-600 dark:text-rose-300">{deleteTarget.name}</strong> dari cabang{' '}
+                  <strong>{activeBranch}</strong>?
+                </>
+              )}
             </p>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                Pesan Commit (Opsional):
+              </label>
+              <input
+                type="text"
+                value={deleteCommitMsg}
+                onChange={(e) => setDeleteCommitMsg(e.target.value)}
+                placeholder={
+                  deleteTarget.type === 'folder'
+                    ? `Hapus folder ${deleteTarget.path} beserta seluruh isinya`
+                    : `Hapus ${deleteTarget.path}`
+                }
+                className="w-full bg-white dark:bg-[#0F172A] border border-slate-300 dark:border-white/10 rounded-2xl px-3.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-rose-500"
+              />
+            </div>
+
+            {deleteError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-600 dark:text-rose-400">
+                {deleteError}
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
+                disabled={isDeleting}
                 onClick={() => setDeleteTarget(null)}
                 className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               >
@@ -1125,9 +1558,216 @@ export const FileManagerView: React.FC = () => {
                 type="button"
                 onClick={handleDeleteSubmit}
                 disabled={isDeleting}
-                className="px-5 py-2 rounded-full bg-gradient-to-r from-rose-500 to-red-600 text-white font-bold text-xs shadow-md hover:scale-105"
+                className="px-5 py-2 rounded-full bg-gradient-to-r from-rose-500 to-red-600 text-white font-bold text-xs shadow-md hover:scale-105 disabled:opacity-50"
               >
-                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus Permanen'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Item Terpilih (Multi-Select) */}
+      {isBulkDeleteModal && selectedPaths.size > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+          <div className="clay-card rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200 dark:border-white/20 space-y-4">
+            <h3 className="text-sm font-bold text-rose-500 dark:text-rose-400 flex items-center gap-2">
+              <Trash2 className="w-4 h-4" />
+              Hapus {selectedPaths.size} Item Terpilih?
+            </h3>
+
+            <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs text-slate-700 dark:text-slate-300 space-y-1.5">
+              <p>
+                Total terdampak:{' '}
+                <strong className="text-rose-600 dark:text-rose-300">
+                  {getAffectedLeaves(Array.from(selectedPaths)).length} berkas
+                </strong>{' '}
+                di cabang <strong>{activeBranch}</strong>.
+              </p>
+              <ul className="text-[11px] font-mono text-slate-600 dark:text-slate-400 max-h-24 overflow-y-auto space-y-0.5 pt-1">
+                {Array.from(selectedPaths)
+                  .slice(0, 6)
+                  .map((p) => (
+                    <li key={p} className="truncate">
+                      • {p}
+                    </li>
+                  ))}
+                {selectedPaths.size > 6 && (
+                  <li className="italic">...dan {selectedPaths.size - 6} item lainnya</li>
+                )}
+              </ul>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                Pesan Commit (Opsional):
+              </label>
+              <input
+                type="text"
+                value={deleteCommitMsg}
+                onChange={(e) => setDeleteCommitMsg(e.target.value)}
+                placeholder={`Hapus ${selectedPaths.size} item terpilih`}
+                className="w-full bg-white dark:bg-[#0F172A] border border-slate-300 dark:border-white/10 rounded-2xl px-3.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-rose-500"
+              />
+            </div>
+
+            {deleteError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-600 dark:text-rose-400">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setIsBulkDeleteModal(false)}
+                className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDeleteSubmit}
+                disabled={isDeleting}
+                className="px-5 py-2 rounded-full bg-gradient-to-r from-rose-500 to-red-600 text-white font-bold text-xs shadow-md hover:scale-105 disabled:opacity-50"
+              >
+                {isDeleting ? 'Menghapus...' : `Hapus ${selectedPaths.size} Item`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Hapus Seluruh File & Folder (Repo Penuh / Folder Saat Ini) */}
+      {isWipeModalOpen && activeRepo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="clay-card rounded-3xl p-6 max-w-md w-full shadow-2xl border border-rose-500/30 space-y-4">
+            <div className="flex items-start justify-between gap-2 pb-2 border-b border-slate-200 dark:border-white/10">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-rose-600 dark:text-rose-400">
+                    Hapus Seluruh File &amp; Folder
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                    {activeRepo.full_name} · {activeBranch}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setIsWipeModalOpen(false)}
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {currentPath && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWipeScope('repo')}
+                  className={`p-2.5 rounded-2xl border text-left text-xs transition-all ${
+                    wipeScope === 'repo'
+                      ? 'border-rose-500 bg-rose-500/15 text-rose-700 dark:text-rose-300 font-bold'
+                      : 'border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <div>Seluruh Repositori</div>
+                  <div className="text-[10px] opacity-80 font-normal">
+                    {allLeafItems.length} berkas (root)
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWipeScope('folder')}
+                  className={`p-2.5 rounded-2xl border text-left text-xs transition-all ${
+                    wipeScope === 'folder'
+                      ? 'border-rose-500 bg-rose-500/15 text-rose-700 dark:text-rose-300 font-bold'
+                      : 'border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <div>Folder Saat Ini</div>
+                  <div className="text-[10px] opacity-80 font-normal truncate">
+                    {getAffectedLeaves([currentPath]).length} berkas ({currentPath})
+                  </div>
+                </button>
+              </div>
+            )}
+
+            <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              {wipeScope === 'folder' && currentPath ? (
+                <>
+                  Tindakan ini akan menghapus permanen seluruh file dan subfolder di dalam{' '}
+                  <strong className="font-mono text-rose-600 dark:text-rose-300">{currentPath}</strong> (
+                  <strong>{getAffectedLeaves([currentPath]).length} berkas</strong>) pada cabang{' '}
+                  <strong>{activeBranch}</strong>.
+                </>
+              ) : (
+                <>
+                  Tindakan ini akan mengosongkan repositori dengan menghapus seluruh{' '}
+                  <strong className="text-rose-600 dark:text-rose-300">
+                    {allLeafItems.length} berkas &amp; seluruh folder
+                  </strong>{' '}
+                  pada cabang <strong>{activeBranch}</strong> (repositori tetap ada).
+                </>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                Pesan Commit (Opsional):
+              </label>
+              <input
+                type="text"
+                value={deleteCommitMsg}
+                onChange={(e) => setDeleteCommitMsg(e.target.value)}
+                placeholder={
+                  wipeScope === 'folder' && currentPath
+                    ? `Hapus seluruh isi folder ${currentPath}`
+                    : `Hapus seluruh file & folder di ${activeRepo.name}`
+                }
+                className="w-full bg-white dark:bg-[#0F172A] border border-slate-300 dark:border-white/10 rounded-2xl px-3.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-rose-500"
+              />
+            </div>
+
+            {deleteError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-600 dark:text-rose-400">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setIsWipeModalOpen(false)}
+                className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleWipeAllSubmit}
+                disabled={isDeleting}
+                className="px-5 py-2 rounded-full bg-gradient-to-r from-rose-500 to-red-600 text-white font-bold text-xs shadow-md hover:scale-105 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Semua</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1160,6 +1800,11 @@ export const FileManagerView: React.FC = () => {
                   className="w-full bg-white dark:bg-[#0F172A] border border-slate-300 dark:border-white/10 rounded-2xl px-3.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-cyan-500 font-mono"
                 />
               </div>
+              {renameError && (
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-600 dark:text-rose-400">
+                  {renameError}
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"

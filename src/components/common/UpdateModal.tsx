@@ -182,9 +182,11 @@ export const UpdateModal: React.FC = () => {
         {/* Header with Title & SILANG (X) Button */}
         <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-200 dark:border-white/10 relative z-10">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-400 via-blue-500 to-indigo-600 flex items-center justify-center text-white font-mono font-black text-xl clay-button-rgb shadow-md shrink-0">
-              F
-            </div>
+            <img
+              src="./icon.png"
+              alt="Fahgit Logo"
+              className="w-11 h-11 rounded-2xl object-contain shadow-md shrink-0"
+            />
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
@@ -197,7 +199,7 @@ export const UpdateModal: React.FC = () => {
                 )}
               </div>
               <h2 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
-                FAHGIT by: Faiz_Fahmi_ID
+                Fahgit by: Faiz_Fahmi_ID
               </h2>
             </div>
           </div>

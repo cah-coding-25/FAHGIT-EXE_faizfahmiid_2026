@@ -1,6 +1,6 @@
-# Changelog — FAHGIT by Faiz_Fahmi_ID
+# Changelog — Fahgit by Faiz_Fahmi_ID
 
-Semua perubahan penting pada proyek **FAHGIT** didokumentasikan dalam berkas ini.
+Semua perubahan penting pada proyek **Fahgit** didokumentasikan dalam berkas ini.
 Format ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/) dan proyek ini mematuhi [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
@@ -24,9 +24,9 @@ Format ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/)
   - Ikon Windows `.ico` multi-resolusi resmi, ikon PNG 512x512, dan profil pengembang **Faiz Fahmi (Faiz_Fahmi_ID)**.
   - Pintasan keyboard desktop (`F12` / `Ctrl+Shift+I` untuk Developer Tools dan `Ctrl+R` untuk Reload).
 - **Tiga Format Distribusi Windows**:
-  1. `FAHGIT-Setup-1.0.0.exe` (Installer resmi NSIS).
-  2. `FAHGIT-Portable-1.0.0.exe` (Biner portabel single-file).
-  3. `FAHGIT-win-unpacked.zip` (Folder aplikasi siap pakai).
+  1. `Fahgit-Setup-1.0.0.exe` (Installer resmi NSIS).
+  2. `Fahgit-Portable-1.0.0.exe` (Biner portabel single-file).
+  3. `Fahgit-win-unpacked.zip` (Folder aplikasi siap pakai).
 
 ### OFFLINE & ONLINE ADAPTIVE (5-TIER)
 - **Full Offline**: Editor Monaco, pratinjau Markdown/HTML, analisis & ekstraksi ZIP, format JSON, tema, dan log lokal berjalan 100% tanpa internet.

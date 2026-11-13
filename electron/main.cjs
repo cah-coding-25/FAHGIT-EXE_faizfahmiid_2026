@@ -58,7 +58,7 @@ function createWindow() {
     height: 850,
     minWidth: 1024,
     minHeight: 680,
-    title: 'FAHGIT by: Faiz_Fahmi_ID',
+    title: 'Fahgit by: Faiz_Fahmi_ID',
     icon: appIcon,
     backgroundColor: '#0A0F1D',
     show: false,
@@ -148,7 +148,7 @@ function checkNetworkConnectivity() {
     const req = https.get(
       'https://api.github.com/zen',
       {
-        headers: { 'User-Agent': 'FAHGIT-Desktop-App' },
+        headers: { 'User-Agent': 'Fahgit-Desktop-App' },
         timeout: 4000,
       },
       (res) => {
@@ -243,7 +243,7 @@ function checkGitHubReleasesDirect(token) {
   const currentVersion = app.getVersion();
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
   const headers = {
-    'User-Agent': 'FAHGIT-Desktop-App',
+    'User-Agent': 'Fahgit-Desktop-App',
     Accept: 'application/vnd.github.v3+json',
   };
   if (token) {
@@ -281,7 +281,7 @@ function checkGitHubReleasesDirect(token) {
           const updateInfo = {
             currentVersion,
             latestVersion,
-            releaseName: release.name || `FAHGIT v${latestVersion}`,
+            releaseName: release.name || `Fahgit v${latestVersion}`,
             releaseNotes: sanitizeReleaseNotes(release.body),
             releaseDate: release.published_at,
             downloadUrl: targetAsset.browser_download_url,
@@ -335,7 +335,7 @@ if (autoUpdater) {
     emitUpdateAvailableOnce({
       currentVersion,
       latestVersion,
-      releaseName: info.releaseName || `FAHGIT v${latestVersion}`,
+      releaseName: info.releaseName || `Fahgit v${latestVersion}`,
       releaseNotes: sanitizeReleaseNotes(rawNotes),
       releaseDate: info.releaseDate || new Date().toISOString(),
       downloadSize: 0,
@@ -374,7 +374,7 @@ if (autoUpdater) {
 // =========================================================================
 ipcMain.handle('desktop:get-app-info', () => {
   return {
-    name: 'FAHGIT',
+    name: 'Fahgit',
     version: app.getVersion(),
     platform: process.platform,
     arch: process.arch,

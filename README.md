@@ -1,23 +1,23 @@
-# FAHGIT by: Faiz_Fahmi_ID
+# Fahgit by: Faiz_Fahmi_ID
 > **FAH UNIVERSAL WEBSITE TO WINDOWS APPLICATION ENGINE WITH PERMANENT AUTO UPDATE SYSTEM**  
 > *Your GitHub. Your Files. Your Control.*  
 > **Versi:** 1.0.0 | **Author:** Faiz_Fahmi_ID
 
 ---
 
-## 1. Arsitektur & Gambaran Umum FAHGIT Desktop
-**FAHGIT** adalah aplikasi desktop Windows dan platform web manajemen repository GitHub modern yang dibangun dengan arsitektur **Offline-First**, runtime **Electron**, dan sistem **Permanent Auto Update** terintegrasi langsung dengan GitHub Releases.
+## 1. Arsitektur & Gambaran Umum Fahgit Desktop
+**Fahgit** adalah aplikasi desktop Windows dan platform web manajemen repository GitHub modern yang dibangun dengan arsitektur **Offline-First**, runtime **Electron**, dan sistem **Permanent Auto Update** terintegrasi langsung dengan GitHub Releases.
 
 Aplikasi ini mendistribusikan tiga output Windows siap pakai:
-1. **Windows EXE Installer (`FAHGIT-Setup-1.0.0.exe`)**: NSIS installer resmi dengan custom install directory, uninstaller bersih, desktop & start menu shortcut, serta registry hygiene.
-2. **Windows EXE Portable (`FAHGIT-Portable-1.0.0.exe`)**: Standalone binary tanpa instalasi, menyimpan state dan cache di direktori user lokal tanpa mengotori registry.
-3. **Windows Unpacked Application (`release/win-unpacked/` & `FAHGIT-win-unpacked.zip`)**: Binary terekstrak siap dijalankan atau di-debug langsung.
+1. **Windows EXE Installer (`Fahgit-Setup-1.0.0.exe`)**: NSIS installer resmi dengan custom install directory, uninstaller bersih, desktop & start menu shortcut, serta registry hygiene.
+2. **Windows EXE Portable (`Fahgit-Portable-1.0.0.exe`)**: Standalone binary tanpa instalasi, menyimpan state dan cache di direktori user lokal tanpa mengotori registry.
+3. **Windows Unpacked Application (`release/win-unpacked/` & `Fahgit-win-unpacked.zip`)**: Binary terekstrak siap dijalankan atau di-debug langsung.
 
 ---
 
 ## 2. Klasifikasi Sistem Online & Offline Adaptif (5-Tier)
 
-FAHGIT menerapkan engine adaptif 5-tier untuk menangani kondisi jaringan secara tangguh tanpa pernah membuat aplikasi crash atau menampilkan layar kosong:
+Fahgit menerapkan engine adaptif 5-tier untuk menangani kondisi jaringan secara tangguh tanpa pernah membuat aplikasi crash atau menampilkan layar kosong:
 
 | Tier | Klasifikasi | Cakupan Fitur | Perilaku Saat Offline |
 | :--- | :--- | :--- | :--- |
@@ -40,7 +40,7 @@ Aplikasi desktop dilengkapi dengan auto-update permanen dari GitHub Releases:
 - **Penyedia**: GitHub Releases (`ghfghjk94-hash/fahgirexe_update`).
 - **Pengecekan Otomatis**: Dilakukan secara ketat hanya **satu kali saat aplikasi pertama kali dibuka** dan hanya menampilkan modal apabila terdapat versi SemVer baru di atas `v1.0.0`.
 - **Modal Interaktif Wajib**:
-  - Menampilkan nama aplikasi: `FAHGIT by: Faiz_Fahmi_ID`.
+  - Menampilkan nama aplikasi: `Fahgit by: Faiz_Fahmi_ID`.
   - Versi saat ini vs Versi terbaru yang tersedia.
   - Tanggal rilis dan ukuran unduhan (MB).
   - Catatan rilis lengkap (Changelog).
@@ -83,10 +83,10 @@ npm run build
 # Membangun Installer (NSIS), Portable EXE, dan Unpacked Directory sekaligus:
 npm run dist:win
 
-# Hanya membangun Windows NSIS Installer (FAHGIT-Setup-1.0.0.exe):
+# Hanya membangun Windows NSIS Installer (Fahgit-Setup-1.0.0.exe):
 npm run dist:nsis
 
-# Hanya membangun Windows Portable EXE (FAHGIT-Portable-1.0.0.exe):
+# Hanya membangun Windows Portable EXE (Fahgit-Portable-1.0.0.exe):
 npm run dist:portable
 
 # Hanya menghasilkan Unpacked Directory (release/win-unpacked/):
@@ -103,12 +103,12 @@ Workflow CI/CD tersedia di `.github/workflows/build-release.yml`:
 2. Melakukan checkout, setup Node.js 20, dan instalasi dependensi.
 3. Menjalankan linter dan build Vite renderer.
 4. Menjalankan `electron-builder` pada runner `windows-latest`.
-5. Mengompresi unpacked folder menjadi `FAHGIT-win-unpacked.zip`.
+5. Mengompresi unpacked folder menjadi `Fahgit-win-unpacked.zip`.
 6. Menghasilkan checksum SHA-256 untuk seluruh artefak release (`checksums.sha256`).
 7. Mempublikasikan GitHub Release baru secara otomatis berisi:
-   - `FAHGIT-Setup-1.0.0.exe`
-   - `FAHGIT-Portable-1.0.0.exe`
-   - `FAHGIT-win-unpacked.zip`
+   - `Fahgit-Setup-1.0.0.exe`
+   - `Fahgit-Portable-1.0.0.exe`
+   - `Fahgit-win-unpacked.zip`
    - `checksums.sha256`
    - Catatan rilis dari `CHANGELOG.md`.
 
@@ -119,5 +119,5 @@ Proyek ini mengikuti standar **Semantic Versioning (SemVer)**: `MAJOR.MINOR.PATC
 Setiap rilis didokumentasikan secara rinci di file `CHANGELOG.md`.
 
 ---
-**FAHGIT by: Faiz_Fahmi_ID**  
+**Fahgit by: Faiz_Fahmi_ID**  
 *Your GitHub. Your Files. Your Control.*
